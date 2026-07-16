@@ -1,0 +1,1598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQL Visualizer</title>
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --panel: #121217;
+    --panel-2: #1a1a20;
+    --border: #23232b;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #4f9cf9;
+    --accent-2: #7c5cff;
+    --green: #10b981;
+    --yellow: #d29922;
+    --red: #f85149;
+    --orange: #db6d28;
+    --cyan: #39c5cf;
+    --indigo: #4f46e5;
+    --purple: #a855f7;
+    --violet: #8b5cf6;
+    --pink: #ec4899;
+    --amber: #f59e0b;
+    --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    padding: 12px 18px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header .logo { color: var(--accent); }
+  header .spacer { flex: 1; }
+  header button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .15s;
+  }
+  header button:hover { border-color: var(--accent); color: var(--accent); }
+  header button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  header button.primary:hover { background: #3b87e0; }
+
+  .main { flex: 1; display: flex; min-height: 0; }
+  .left {
+    width: 40%;
+    min-width: 320px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+  }
+  .editors { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .er {
+    flex: 1;
+    overflow: auto;
+    background-color: #060608;
+    background-image: radial-gradient(#1c1c21 1px, transparent 1px);
+    background-size: 24px 24px;
+    background-position: 12px 12px;
+    padding: 14px;
+  }
+  .er svg { display: block; }
+
+  /* ---- table origin styles ---- */
+  .er-card { fill: #16161a; stroke: rgba(255,255,255,0.10); stroke-width: 1.5; }
+  .er-card.subq { fill: url(#erSubqGrad); stroke: rgba(168,85,247,0.80); }
+  .er-card.cte { fill: #0f1a1a; stroke: rgba(20,184,166,0.60); }
+  .er-card.manual { fill: #16161a; stroke: rgba(16,185,129,0.35); }
+  .er-table .thead-rect { fill: rgba(148,163,184,0.12); }
+  .er-table.subq .thead-rect { fill: rgba(168,85,247,0.20); }
+  .er-table.cte .thead-rect { fill: rgba(20,184,166,0.15); }
+  .er-table.manual .thead-rect { fill: rgba(16,185,129,0.20); }
+  .er-table .tname { fill: #e6edf3; font: 600 13px var(--font-mono); }
+  .er-table .trow { fill: #9aa4b2; font: 11px var(--font-mono); }
+  .er-table.subq .tname { fill: #e9d5ff; }
+  .er-table.cte .tname { fill: #ccfbf1; }
+  .er-table.manual .tname { fill: #d1fae5; }
+
+  .er-origin { stroke-width: 0; }
+  .er-origin.std { fill: #6366f1; }
+  .er-origin.subq { fill: #a855f7; }
+  .er-origin.cte { fill: #14b8a6; }
+  .er-origin.manual { fill: #10b981; }
+
+  /* CTE grouping background */
+  .er-cte-group { fill: rgba(20,184,166,0.04); stroke: rgba(20,184,166,0.25); stroke-width: 1; stroke-dasharray: 6 3; rx: 12; }
+  .er-cte-label { fill: rgba(20,184,166,0.55); font: 600 11px var(--font-mono); }
+
+  .er-joinrow { fill: rgba(99,102,241,0.16); stroke: rgba(99,102,241,0.45); stroke-width: 1; transition: opacity .15s; }
+  .er-table .trow.join-col { fill: #c7d2fe; font-weight: 700; transition: opacity .15s; }
+  /* only highlight the ACTIVE join's columns; dim the rest under hover */
+  .er svg.has-hover .er-joinrow { opacity: .12; }
+  .er svg.has-hover .trow.join-col { fill: var(--muted); font-weight: 400; }
+  .er svg.has-hover .er-joinrow.active { opacity: 1; }
+  .er svg.has-hover .trow.join-col.active { fill: #c7d2fe; font-weight: 700; }
+
+  /* column badges */
+  .er-cbadge { font: 700 8px var(--font-mono); letter-spacing: .3px; }
+  .er-cbadge.pk { fill: #c7d2fe; }
+  .er-cbadge.grp { fill: #fbbf24; }
+  .er-cbadge.sort { fill: #c4b5fd; }
+  .er-cbadge.filt { fill: #6ee7b7; }
+  .er-cbadge.case { fill: #a5b4fc; }
+
+  .er-port { filter: drop-shadow(0 0 4px currentColor); }
+  .er-badge { cursor: default; }
+  .er-badge rect { opacity: .95; }
+  .er-badge-txt { fill: #fff; font: 700 10px var(--font-mono); letter-spacing: .4px; }
+  .er-badge-txt.dark { fill: #0a0a0c; }
+  .er-line { fill: none; transition: stroke-width .12s; }
+  .er-glow { opacity: 0; transition: opacity .12s; pointer-events: none; }
+  .er-hit { cursor: pointer; }
+  .er-join:hover .er-glow { opacity: .55; }
+  .er-join:hover .er-line { stroke-width: 3; }
+
+  /* hover dimming: when canvas has .dim, non-hovered fade */
+  .er svg.has-hover .er-table,
+  .er svg.has-hover .er-join { transition: opacity .15s; }
+  .er svg.has-hover .er-table.faded,
+  .er svg.has-hover .er-join.faded { opacity: .15; }
+
+  .er-empty { color: var(--muted); font-size: 12.5px; padding: 8px 4px; }
+  .er-head { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .er-toggle { font-size: 11px; color: var(--muted); padding: 0 14px 2px 0; cursor: pointer; user-select: none; }
+  .er-toggle input { vertical-align: -1px; margin-right: 4px; accent-color: var(--accent); }
+  .sql-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+  .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: var(--muted);
+    padding: 8px 14px 4px;
+  }
+  textarea {
+    flex: 1;
+    background: #0b0f14;
+    color: var(--text);
+    border: none;
+    padding: 12px 14px;
+    font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 13.5px;
+    line-height: 1.55;
+    resize: none;
+    outline: none;
+    tab-size: 2;
+  }
+  .right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg);
+  }
+  .pipeline {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .stage {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    position: relative;
+    animation: fadeIn .25s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px);} to {opacity:1; transform:none;} }
+  .stage-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .stage-num {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    display: grid; place-items: center;
+    font-size: 12px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .stage-title { font-weight: 600; font-size: 14px; }
+  .stage-type {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: var(--panel-2);
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .stage-desc { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+  .stage-body { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+  .chip {
+    display: inline-block;
+    padding: 2px 9px;
+    margin: 3px 4px 3px 0;
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 12.5px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    word-break: break-word;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .chip.col { color: var(--cyan); border-color: #1c4a4d; }
+  .chip.table { color: var(--green); border-color: #1c4a26; }
+  .chip.kw { color: var(--accent-2); border-color: #3a2c66; }
+  .chip.cond { color: var(--yellow); border-color: #4a3a14; }
+  .chip.case { color: var(--orange); border-color: #4a2e14; }
+  .chip.agg { color: var(--red); border-color: #4a1c1c; }
+  .arrow {
+    text-align: center;
+    color: var(--muted);
+    margin: 6px 0;
+    font-size: 18px;
+    line-height: 1;
+  }
+  .arrow::before { content: "▼"; }
+  .join-viz {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 4px;
+  }
+  .join-table {
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: #16211a;
+    border: 1px solid #1c4a26;
+    color: var(--green);
+    font-family: monospace;
+    font-size: 12.5px;
+  }
+  .join-op { font-size: 11px; color: var(--accent-2); text-align: center; max-width: 150px; }
+  .join-table .small-alias { color: var(--muted); font-size: 11px; }
+  .join-help { margin-top: 4px; color: var(--muted); font-size: 10.5px; font-weight: normal; line-height: 1.3; }
+  .case-box {
+    background: var(--panel-2);
+    border-left: 3px solid var(--orange);
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin: 6px 0;
+    font-size: 12.5px;
+    font-family: monospace;
+  }
+  .case-box .when { color: var(--yellow); }
+  .case-box .then { color: var(--cyan); }
+  .case-box .else { color: var(--muted); }
+  .order-dir { font-size: 11px; }
+  .order-dir.asc { color: var(--green); }
+  .order-dir.desc { color: var(--red); }
+  .empty-state {
+    text-align: center;
+    color: var(--muted);
+    margin-top: 60px;
+    font-size: 14px;
+  }
+  .error {
+    background: #2a1416;
+    border: 1px solid #4a1c1c;
+    color: var(--red);
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+  .diagram {
+    margin-top: 10px;
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 14px;
+    text-align: center;
+  }
+  .diagram svg { max-width: 100%; }
+  .legend {
+    display: flex; gap: 14px; flex-wrap: wrap;
+    padding: 8px 18px;
+    font-size: 11px; color: var(--muted);
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    flex-shrink: 0;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .scrollbar::-webkit-scrollbar, .pipeline::-webkit-scrollbar { width: 10px; }
+  .pipeline::-webkit-scrollbar-thumb { background: #2d3742; border-radius: 5px; }
+  .pipeline::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="logo">⛁</span> SQL Visualizer</h1>
+  <span style="color:var(--muted);font-size:12px;">See how your query executes, step by step</span>
+  <div class="spacer"></div>
+  <button id="clearBtn">Clear</button>
+</header>
+
+<div class="main">
+  <div class="left">
+    <div class="editors">
+      <div class="sql-wrap">
+        <div class="label">SQL Query</div>
+        <textarea id="sql" spellcheck="false" placeholder="SELECT ..."></textarea>
+      </div>
+      <div class="sql-wrap" id="erWrap" style="min-height:38%;flex:1 1 38%;">
+        <div class="er-head">
+          <div class="label" style="padding:8px 14px 4px;">Table Relationships (from JOINs)</div>
+          <label class="er-toggle"><input type="checkbox" id="erAllCols"> Show all columns</label>
+        </div>
+        <div id="erDiagram" class="er"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="pipeline" id="pipeline">
+      <div class="empty-state">Run <b>Visualize</b> to break this query into logical execution stages.</div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--cyan)"></i>column</span>
+      <span><i style="background:var(--green)"></i>table</span>
+      <span><i style="background:var(--accent-2)"></i>keyword</span>
+      <span><i style="background:var(--yellow)"></i>condition</span>
+      <span><i style="background:var(--orange)"></i>case</span>
+      <span><i style="background:var(--red)"></i>aggregate</span>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---------- Tokenizer ----------
+function tokenize(sql) {
+  const tokens = [];
+  const re = /\/\*[\s\S]*?\*\/|\s+|--[^\n]*|#[^\n]*|'(?:[^']|'')*'|`[^`]*`|"[^"]*"|[(),.;*]|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|>=|<=|<>|!=|=|>|<|\+|-|\/|%|\b[a-zA-Z_][a-zA-Z0-9_]*\b/g;
+  let m;
+  while ((m = re.exec(sql)) !== null) {
+    const t = m[0];
+    if (/^\s+$/.test(t) || t.startsWith("--") || t.startsWith("/*") || t.startsWith("#")) continue;
+    let type = "sym";
+    if (/^[a-zA-Z_]/.test(t)) type = "word";
+    else if (/^\d/.test(t)) type = "num";
+    else if (/^'.*'$/.test(t)) type = "str";
+    else if (/^[(),.;*]$/.test(t)) type = "punc";
+    tokens.push({ v: t, type, i: m.index });
+  }
+  return tokens;
+}
+
+const KEYWORDS = new Set([
+  "select","from","where","group","by","order","having","join","inner","left",
+  "right","full","outer","on","as","and","or","not","in","like","between","is",
+  "null","distinct","limit","union","case","when","then","else","end","asc","desc",
+  "cross","using","with","over","partition","union","all","top","into",
+  "qualify","window","tablesample","struct","pivot","unpivot","cluster",
+  "recursive","except","replace","intersect","offset","value","values",
+  "table","each","hash","sample","tumble","hop","session"
+]);
+const AGGREGATES = new Set(["count","sum","avg","min","max","group_concat","string_agg","array_agg",
+  "approx_count_distinct","approx_quantiles","approx_top_count","countif","any_value","bit_and",
+  "bit_or","bit_xor","logical_and","logical_or","stddev","stddev_samp","stddev_pop","variance",
+  "var_samp","var_pop","corr","covar_pop","covar_samp","array_length"]);
+
+function isKeyword(w){ return KEYWORDS.has(w.toLowerCase()); }
+function isAgg(w){ return AGGREGATES.has(w.toLowerCase()); }
+
+// segment tokens into top-level clause groups.
+// Only the major clause heads start a new group; sub-keywords (AS, ON, BY,
+// ASC, DESC, AND, OR, ...) stay inside their parent clause.
+const JOIN_MODS = ["inner","left","right","full","outer","cross"];
+const JOIN_HELP = {
+  inner: "Keep only rows that match in BOTH tables.",
+  left: "Keep all rows from the left table; fill unmatched right columns with NULL.",
+  right: "Keep all rows from the right table; fill unmatched left columns with NULL.",
+  full: "Keep all rows from BOTH tables; fill unmatched sides with NULL.",
+  cross: "Pair every row of the left table with every row of the right (cartesian product).",
+  outer: "Same as FULL: keep all rows from both tables."
+};
+function isClauseHead(toks, i) {
+  const w = toks[i].v.toLowerCase();
+  // multi-word heads first
+  const multi = {
+    "order": "by", "group": "by", "union": "all", "cluster": "by", "partition": "by"
+  };
+  if (multi[w] && i + 1 < toks.length && toks[i+1].v.toLowerCase() === multi[w]) return 2;
+  // join direction modifier immediately followed by JOIN starts the join clause
+  if (JOIN_MODS.includes(w) && i + 1 < toks.length && toks[i+1].v.toLowerCase() === "join") return 2;
+  // single-word heads
+  if (["select","from","where","having","join","limit","union","qualify","window","tablesample","offset"].includes(w)) return 1;
+  return 0;
+}
+function splitClauses(tokens) {
+  const clauses = [];
+  let cur = null;
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const tk = tokens[i];
+    if (tk.v === "(") depth++;
+    else if (tk.v === ")") depth--;
+    if (tk.type === "word" && depth === 0) {
+      const span = isClauseHead(tokens, i);
+      if (span) {
+        cur = { kw: tokens.slice(i, i+span).map(t => t.v.toLowerCase()).join(" "), toks: [] };
+        clauses.push(cur);
+        i += span - 1; // skip consumed head tokens
+        continue;
+      }
+    }
+    if (cur) cur.toks.push(tk);
+  }
+  return clauses;
+}
+
+// parse a comma-separated expression list from a token array (respecting parens)
+function splitTopLevelCommas(toks) {
+  const parts = [];
+  let depth = 0, cur = [];
+  for (const t of toks) {
+    if (t.v === "(") depth++;
+    else if (t.v === ")") depth--;
+    if (t.v === "," && depth === 0) { parts.push(cur); cur = []; }
+    else cur.push(t);
+  }
+  if (cur.length) parts.push(cur);
+  return parts;
+}
+
+function toText(toks){
+  return toks.map((t, k) => {
+    const prev = toks[k-1];
+    let s = t.v;
+    if (prev) {
+      const prevIsContent = prev.type === "word" || prev.type === "str" || prev.type === "sym" || prev.type === "num";
+      const curIsContent = t.type === "word" || t.type === "str" || t.type === "sym" || t.type === "num";
+      if (prevIsContent && curIsContent) s = " " + s;
+    }
+    return s;
+  }).join("").replace(/\s+/g," ").trim();
+}
+
+// ---------- Main analysis ----------
+function analyze(sql) {
+  const tokens = tokenize(sql).filter(t => t.v !== ";");
+  const clauses = splitClauses(tokens);
+  const stages = [];
+
+  // map clause keyword -> token group
+  const get = (k) => clauses.find(c => c.kw === k || c.kw === k + " by");
+  const getIdx = (k) => clauses.findIndex(c => c.kw === k);
+
+  // FROM + JOIN handling (data sources)
+  const fromC = get("from");
+  const joinCs = clauses.filter(c => c.kw.endsWith("join"));
+  const dataSourceOrder = [];
+  if (fromC) {
+    // first table expression is in FROM
+    const ft = extractFirstTable(fromC.toks);
+    dataSourceOrder.push(ft);
+  }
+  joinCs.forEach(jc => {
+    const kind = detectJoinKind(jc);
+    const tgt = extractFirstTable(jc.toks);
+    const onIdx = jc.toks.findIndex(t => t.v.toLowerCase() === "on");
+    let onToks = onIdx >= 0 ? jc.toks.slice(onIdx + 1) : null;
+    if (onToks) {
+      // drop any stray trailing join modifier that leaked past the condition
+      while (onToks.length && JOIN_MODS.includes(onToks[onToks.length-1].v.toLowerCase())) onToks.pop();
+    }
+    dataSourceOrder.push({ ...tgt, joinKind: kind, onToks });
+  });
+
+  if (dataSourceOrder.length) {
+    const base = dataSourceOrder[0];
+    let desc = "Read rows from table ";
+    desc += `<span class="chip table">${esc(base.name)}</span>`;
+    if (base.alias && base.alias !== base.name) desc += ` (alias <span class="chip table">${esc(base.alias)}</span>)`;
+    const joins = dataSourceOrder.slice(1);
+    if (joins.length) {
+      desc += " then combine with " + joins.map(j => {
+        let s = `<span class="chip table">${esc(j.name)}</span>`;
+        if (j.alias && j.alias !== j.name) s += ` (alias <span class="chip table">${esc(j.alias)}</span>)`;
+        return s;
+      }).join(", ");
+    }
+    let joinViz = "";
+    if (joins.length) {
+      joinViz = `<div class="join-viz">` +
+        `<div class="join-table">${esc(base.name)}${base.alias && base.alias !== base.name ? ` <span class="small-alias">(${esc(base.alias)})</span>` : ""}</div>`;
+      joins.forEach(j => {
+        const jk = j.joinKind.toLowerCase();
+        const help = JOIN_HELP[jk] || "";
+        joinViz += `<div class="join-op"><b>${esc(j.joinKind.toUpperCase())} JOIN</b><br>` +
+          (j.onToks ? `<span class="chip cond">${esc(toText(j.onToks))}</span>` : "no condition") +
+          (help ? `<div class="join-help">${esc(help)}</div>` : "") +
+          `</div><div class="join-table">${esc(j.name)}${j.alias && j.alias !== j.name ? ` <span class="small-alias">(${esc(j.alias)})</span>` : ""}</div>`;
+      });
+      joinViz += `</div>`;
+    }
+    stages.push({
+      title: "Data Sources (FROM / JOIN)",
+      type: "from",
+      desc,
+      body: joinViz
+    });
+  }
+
+  // WHERE
+  const whereC = get("where");
+  if (whereC) {
+    stages.push({
+      title: "Filter Rows (WHERE)",
+      type: "where",
+      desc: "Keep only rows where the condition is true — runs <i>before</i> grouping.",
+      body: renderConditions(whereC.toks)
+    });
+  }
+
+  // GROUP BY
+  const groupC = get("group");
+  if (groupC) {
+    const byIdx = groupC.toks.findIndex(t => t.v.toLowerCase() === "by");
+    const rest = byIdx >= 0 ? groupC.toks.slice(byIdx+1) : groupC.toks;
+    const cols = splitTopLevelCommas(rest).map(p => toText(p)).filter(Boolean);
+    stages.push({
+      title: "Group Rows (GROUP BY)",
+      type: "group",
+      desc: "Collapse rows into groups sharing the same values in these columns, so aggregates compute per group.",
+      body: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ")
+    });
+  }
+
+  // SELECT (projections) — show CASE & aggregates
+  const selectC = get("select");
+  if (selectC) {
+    const distinct = selectC.toks[0] && selectC.toks[0].v.toLowerCase() === "distinct";
+    const exprToks = distinct ? selectC.toks.slice(1) : selectC.toks;
+    const exprs = splitTopLevelCommas(exprToks);
+    let body = "";
+    if (distinct) body += `<span class="chip kw">DISTINCT</span> `;
+    exprs.forEach(e => {
+      const txt = toText(e);
+      if (/case/i.test(txt)) {
+        body += renderCase(e);
+      } else {
+        const agg = containsAgg(e);
+        body += `<span class="chip ${agg?'agg':'col'}">${esc(txt)}</span> `;
+      }
+    });
+    stages.push({
+      title: "Project Columns (SELECT)",
+      type: "select",
+      desc: "Choose which columns/expressions appear in the output." + (distinct ? " Remove duplicate result rows." : ""),
+      body
+    });
+  }
+
+  // HAVING
+  const havingC = get("having");
+  if (havingC) {
+    stages.push({
+      title: "Filter Groups (HAVING)",
+      type: "having",
+      desc: "Like WHERE, but applied to <i>aggregated groups</i> — runs after GROUP BY.",
+      body: renderConditions(havingC.toks)
+    });
+  }
+
+  // QUALIFY — filter on window functions (runs after window computation, before ORDER/LIMIT)
+  const qualifyC = get("qualify");
+  if (qualifyC) {
+    stages.push({
+      title: "Filter Window Results (QUALIFY)",
+      type: "qualify",
+      desc: "BigQuery: filter rows based on the result of a window function (like WHERE, but for window outputs).",
+      body: renderConditions(qualifyC.toks)
+    });
+  }
+
+  // ORDER BY
+  const orderC = get("order");
+  if (orderC) {
+    const byIdx = orderC.toks.findIndex(t => t.v.toLowerCase() === "by");
+    const rest = byIdx >= 0 ? orderC.toks.slice(byIdx+1) : orderC.toks;
+    const parts = splitTopLevelCommas(rest);
+    let body = "";
+    parts.forEach(p => {
+      // detect trailing asc/desc
+      let dir = "asc", toks = p;
+      if (toks.length >= 1) {
+        const last = toks[toks.length-1];
+        if (last.type === "word" && /^(asc|desc)$/i.test(last.v)) {
+          dir = last.v.toLowerCase(); toks = toks.slice(0, -1);
+        }
+      }
+      body += `<span class="chip col">${esc(toText(toks))}</span> <span class="order-dir ${dir}">${dir.toUpperCase()}</span> `;
+    });
+    stages.push({
+      title: "Sort Results (ORDER BY)",
+      type: "order",
+      desc: "Order the final result set by the columns above.",
+      body
+    });
+  }
+
+  // LIMIT
+  const limitC = get("limit");
+  if (limitC) {
+    stages.push({
+      title: "Limit Rows (LIMIT)",
+      type: "limit",
+      desc: "Keep only the first <span class='chip kw'>" + esc(toText(limitC.toks)) + "</span> rows.",
+      body: ""
+    });
+  }
+
+  // CLUSTER BY
+  const clusterC = get("cluster");
+  if (clusterC) {
+    const byIdx = clusterC.toks.findIndex(t => t.v.toLowerCase() === "by");
+    const rest = byIdx >= 0 ? clusterC.toks.slice(byIdx+1) : clusterC.toks;
+    const cols = splitTopLevelCommas(rest).map(p => toText(p)).filter(Boolean);
+    stages.push({
+      title: "Cluster By (CLUSTER BY)",
+      type: "cluster",
+      desc: "BigQuery: co-locate rows sharing these column values for storage/performance (applied before LIMIT).",
+      body: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ")
+    });
+  }
+
+  // WINDOW — named window definitions
+  const windowC = get("window");
+  if (windowC) {
+    stages.push({
+      title: "Named Windows (WINDOW)",
+      type: "window",
+      desc: "BigQuery: define reusable window specifications referenced by OVER(...) in SELECT.",
+      body: `<span class="chip kw">${esc(toText(windowC.toks))}</span>`
+    });
+  }
+
+  // ----- build ER relationship model from data sources -----
+  const cteNames = collectCTENames(tokens);
+  const er = buildER(dataSourceOrder, tokens, cteNames);
+
+  return { stages, er };
+}
+
+// Build an entity-relationship model: tables + the join links between them.
+function buildER(sources, allTokens, cteNames){
+  const tables = [];
+  const seen = new Set();
+  const links = [];
+
+  // Helper: add a table entry if not already seen, return its key
+  function addTable(name, alias, origin, cteName) {
+    const baseKey = (alias || name).toLowerCase();
+    const key = cteName ? cteName + "." + baseKey : baseKey;
+    if (!seen.has(key)) {
+      const isUnnest = stripTicks(name).toLowerCase().startsWith("unnest(");
+      const tbl = { name, alias, key, cols: [], allCols: [],
+                    origin: origin || (isUnnest ? "std" : "std"), colMeta: {},
+                    cteName: cteName || null };
+      if (isUnnest) {
+        const inner = stripTicks(name).slice(7, -1);
+        const dot = inner.lastIndexOf(".");
+        if (dot >= 0) tbl.cols.push(stripTicks(inner.slice(dot + 1)));
+      }
+      tables.push(tbl);
+    }
+    return key;
+  }
+
+  // Helper: add a join link between two table keys
+  function addLink(fromKey, toKey, left, right, leftCol, rightCol, kind) {
+    links.push({ from: fromKey, to: toKey, left, right, leftCol, rightCol, kind });
+    addCol(tables, fromKey, leftCol, "cols");
+    addCol(tables, toKey, rightCol, "cols");
+  }
+
+  // --- Process main query sources ---
+  sources.forEach((s, idx) => {
+    const isSubq = cteNames.includes(stripTicks(s.name).toLowerCase());
+    const key = addTable(s.name, s.alias, isSubq ? "subq" : "std", null);
+    if (idx > 0 && s.onToks) {
+      const pairs = parseOnPairs(s.onToks);
+      if (pairs.length) {
+        pairs.forEach(p => {
+          const fromKey = resolveTableKey(tables, p.left);
+          const toKey = resolveTableKey(tables, p.right);
+          addLink(fromKey, toKey, p.left, p.right, colOf(p.left), colOf(p.right), s.joinKind);
+        });
+      } else {
+        addLink(tables[0].key, key, null, null, null, null, s.joinKind);
+      }
+    }
+  });
+
+  // --- Expand CTE internals ---
+  if (allTokens && cteNames.length) {
+    const cteBodies = extractCTEBodies(allTokens);
+    const processed = new Set(); // prevent infinite recursion on self-referencing CTEs
+
+    function expandCTE(cteName) {
+      if (processed.has(cteName)) return;
+      processed.add(cteName);
+      const bodyToks = cteBodies[cteName];
+      if (!bodyToks) return;
+
+      // Extract FROM/JOIN sources from this CTE body
+      const cteSources = extractSourcesFromTokens(bodyToks);
+
+      cteSources.forEach((s, idx) => {
+        const srcName = stripTicks(s.name).toLowerCase();
+        const isNestedCTE = cteNames.includes(srcName) && srcName !== cteName;
+
+        // If this source is another CTE, recurse into it first
+        if (isNestedCTE) expandCTE(srcName);
+
+        const isSubqRef = cteNames.includes(srcName);
+        const key = addTable(s.name, s.alias, isSubqRef ? "subq" : "cte", cteName);
+
+        if (idx > 0 && s.onToks) {
+          const pairs = parseOnPairs(s.onToks);
+          if (pairs.length) {
+            pairs.forEach(p => {
+              // Resolve each side of the ON condition to a table key
+              // Handle both "alias.col" and "ctePrefix.alias.col" formats
+              function resolveSide(ref) {
+                if (!ref) return tables[0]?.key;
+                const dotIdx = ref.indexOf(".");
+                if (dotIdx < 0) return tables[0]?.key;
+                const alias = stripTicks(ref.slice(0, dotIdx)).toLowerCase();
+                // Try direct alias/name match
+                let hit = tables.find(tb => tb.alias.toLowerCase() === alias || stripTicks(tb.name).toLowerCase() === alias);
+                if (hit) return hit.key;
+                // Try CTE-prefixed match (e.g. alias "o" matches key "customer_spending.o")
+                hit = tables.find(tb => tb.key.endsWith("." + alias));
+                return hit ? hit.key : tables[0]?.key;
+              }
+              const fromKey = resolveSide(p.left);
+              const toKey = resolveSide(p.right) || key;
+              addLink(fromKey, toKey, p.left, p.right, colOf(p.left), colOf(p.right), s.joinKind);
+            });
+          } else {
+            addLink(tables[0].key, key, null, null, null, null, s.joinKind);
+          }
+        }
+      });
+    }
+
+    // Expand all CTEs that are referenced by main query tables
+    const mainCTEs = sources.filter(s => cteNames.includes(stripTicks(s.name).toLowerCase()))
+                             .map(s => stripTicks(s.name).toLowerCase());
+    mainCTEs.forEach(cteName => expandCTE(cteName));
+  }
+
+  // grab every referenced column across the whole query
+  if (allTokens) collectAllColumns(allTokens, tables);
+  // attach per-column metadata badges (GRP / SORT / FILTER / CASE / PK)
+  annotateColumns(tables, allTokens, cteNames);
+  return { tables, links };
+}
+
+// Extract CTE names from a WITH clause: `name AS ( ... )`
+function collectCTENames(tokens){
+  const names = [];
+  for (let i=0;i<tokens.length;i++){
+    if (tokens[i].type==="word" && tokens[i].v.toLowerCase()==="with"){
+      // scan forward for cte_name AS (
+      let j = i+1;
+      while (j < tokens.length){
+        if (tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="("){
+          const nm = stripTicks(tokens[j].v).toLowerCase();
+          // next should be AS then (
+          if (tokens[j+1] && tokens[j+1].v.toLowerCase()==="as" &&
+              tokens[j+2] && tokens[j+2].v==="("){
+            if (!names.includes(nm)) names.push(nm);
+          }
+        }
+        if (tokens[j].v==="select") break; // stop at the main select
+        j++;
+      }
+    }
+  }
+  return names;
+}
+
+// Extract each CTE's body tokens: { cteName: token[] }
+// Handles balanced parens to capture the full CTE body.
+function extractCTEBodies(tokens){
+  const bodies = {};
+  for (let i=0;i<tokens.length;i++){
+    if (tokens[i].type==="word" && tokens[i].v.toLowerCase()==="with"){
+      let j = i+1;
+      while (j < tokens.length){
+        // look for: cte_name AS (
+        if (tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="(" &&
+            tokens[j+1] && tokens[j+1].v.toLowerCase()==="as" &&
+            tokens[j+2] && tokens[j+2].v==="("){
+          const nm = stripTicks(tokens[j].v).toLowerCase();
+          // capture balanced parens starting at the opening (
+          let depth = 0, bodyStart = j+2; // j+2 is the opening (
+          for (let k = bodyStart; k < tokens.length; k++){
+            if (tokens[k].v==="(") depth++;
+            else if (tokens[k].v===")"){ depth--; if(depth===0){
+              bodies[nm] = tokens.slice(bodyStart+1, k); // +1 to skip opening paren
+              break;
+            }}
+          }
+        }
+        if (tokens[j].v==="select") break;
+        j++;
+      }
+    }
+  }
+  return bodies;
+}
+
+// Extract FROM/JOIN data sources from a token array (reused for CTE bodies).
+function extractSourcesFromTokens(toks){
+  const clauses = splitClauses(toks);
+  const get = (k) => clauses.find(c => c.kw === k || c.kw === k + " by");
+  const fromC = get("from");
+  const joinCs = clauses.filter(c => c.kw.endsWith("join"));
+  const sources = [];
+  if (fromC) sources.push(extractFirstTable(fromC.toks));
+  joinCs.forEach(jc => {
+    const kind = detectJoinKind(jc);
+    const tgt = extractFirstTable(jc.toks);
+    const onIdx = jc.toks.findIndex(t => t.v.toLowerCase() === "on");
+    let onToks = onIdx >= 0 ? jc.toks.slice(onIdx + 1) : null;
+    if (onToks) {
+      while (onToks.length && JOIN_MODS.includes(onToks[onToks.length-1].v.toLowerCase())) onToks.pop();
+    }
+    sources.push({ ...tgt, joinKind: kind, onToks });
+  });
+  return sources;
+}
+
+// Add GRP / SORT / FILTER / CASE badges to columns of the relevant tables.
+function annotateColumns(tables, tokens, cteNames){
+  if (!tokens) return;
+  const keyFor = (ref) => {
+    const dot = ref.indexOf(".");
+    if (dot < 0) return tables.length ? tables[0].key : null;
+    const t = stripTicks(ref.slice(0, dot)).toLowerCase();
+    let hit = tables.find(tb => tb.alias.toLowerCase()===t || stripTicks(tb.name).toLowerCase()===t);
+    if (hit) return hit.key;
+    // Try CTE-prefixed keys
+    hit = tables.find(tb => tb.key.endsWith("." + t));
+    return hit ? hit.key : tables[0].key;
+  };
+  function mark(ref, badge){
+    const dot = ref.indexOf(".");
+    if (dot < 0) return;
+    const key = keyFor(ref);
+    const col = colOf(ref);
+    const tb = tables.find(t => t.key===key);
+    if (!tb) return;
+    tb.colMeta[col] = tb.colMeta[col] || new Set();
+    tb.colMeta[col].add(badge);
+  }
+  // extract clauses by simple keyword scan on token list (top-level)
+  let i=0, depth=0;
+  let cur = [];
+  const clauses = {};
+  while (i < tokens.length){
+    const tk = tokens[i];
+    if (tk.v==="(") depth++;
+    else if (tk.v===")") depth--;
+    if (depth===0 && tk.type==="word"){
+      const w = tk.v.toLowerCase();
+      if (["where","group","order","having"].includes(w)){
+        // capture until next top-level clause head
+        let j=i+1; const buf=[]; let d2=0;
+        while (j<tokens.length){
+          const t2=tokens[j];
+          if (t2.v==="(") d2++;
+          else if (t2.v===")") d2--;
+          if (d2===0 && t2.type==="word" && ["where","group","order","having","limit","union","from","select"].includes(t2.v.toLowerCase())) break;
+          buf.push(t2); j++;
+        }
+        clauses[w] = buf;
+        i=j; continue;
+      }
+    }
+    i++;
+  }
+  // GROUP BY -> GRP
+  if (clauses.group){
+    const by = clauses.group.findIndex(t=>t.v.toLowerCase()==="by");
+    splitTopLevelCommas(by>=0?clauses.group.slice(by+1):clauses.group)
+      .forEach(p=>{ const txt=toText(p); const dot=txt.indexOf("."); if(dot>=0) mark(txt,"grp"); });
+  }
+  // ORDER BY -> SORT
+  if (clauses.order){
+    const by = clauses.order.findIndex(t=>t.v.toLowerCase()==="by");
+    splitTopLevelCommas(by>=0?clauses.order.slice(by+1):clauses.order)
+      .forEach(p=>{ const txt=toText(p).replace(/\s+(asc|desc)$/i,""); const dot=txt.indexOf("."); if(dot>=0) mark(txt,"sort"); });
+  }
+  // WHERE -> FILTER
+  if (clauses.where){
+    // find qualified column refs inside condition
+    for (let k=0;k<clauses.where.length-2;k++){
+      if (clauses.where[k].type==="word" && clauses.where[k+1].v==="." && clauses.where[k+2].type==="word"){
+        const ref = clauses.where[k].v+"."+clauses.where[k+2].v;
+        // skip if it's part of a larger dotted path already handled
+        mark(ref,"filt");
+      }
+    }
+  }
+  // CASE columns: mark `a.b` references that fall inside a CASE..END block
+  if (tokens){
+    let depth = 0;
+    for (let k=0;k<tokens.length;k++){
+      const w = tokens[k].v.toLowerCase();
+      if (w === "case") depth++;
+      else if (w === "end") depth = Math.max(0, depth-1);
+      if (depth > 0 && k+2 < tokens.length &&
+          tokens[k].type==="word" && tokens[k+1].v==="." && tokens[k+2].type==="word" &&
+          !isKeyword(tokens[k].v) && !isKeyword(tokens[k+2].v)){
+        mark(tokens[k].v+"."+tokens[k+2].v, "case");
+      }
+    }
+  }
+}
+
+function colOf(ref){
+  if (!ref) return null;
+  const dot = ref.lastIndexOf(".");
+  return dot < 0 ? ref : ref.slice(dot + 1);
+}
+function tblOf(ref){
+  if (!ref) return null;
+  const dot = ref.lastIndexOf(".");
+  return dot < 0 ? null : ref.slice(0, dot);
+}
+// BigQuery uses backticks for quoted identifiers; strip them for matching.
+function stripTicks(s){
+  if (!s) return s;
+  return s.replace(/`/g, "");
+}
+function addCol(tables, key, col, bucket){
+  if (!col) return;
+  const tb = tables.find(t => t.key === key);
+  if (!tb) return;
+  const list = tb[bucket] || tb.cols;
+  if (!list.includes(col)) list.push(col);
+}
+
+// Collect every `alias.col` / `table.col` reference across the whole query and
+// assign each column to its owning table. Unqualified columns go to the first
+// (FROM) table as a best-effort guess.
+function collectAllColumns(tokens, tables){
+  // build alias/name -> key lookup
+  const keys = tables.map(t => t.key);
+  const keyFor = (ref) => {
+    const dot = ref.indexOf(".");
+    if (dot < 0) return tables.length ? tables[0].key : null;
+    const t = stripTicks(ref.slice(0, dot)).toLowerCase();
+    let hit = tables.find(tb => tb.alias.toLowerCase() === t || stripTicks(tb.name).toLowerCase() === t);
+    if (hit) return hit.key;
+    // Try CTE-prefixed keys
+    hit = tables.find(tb => tb.key.endsWith("." + t));
+    return hit ? hit.key : tables[0].key;
+  };
+  let i = 0;
+  while (i < tokens.length){
+    const tk = tokens[i];
+    // pattern: word . word  where first word is a known alias/table
+    if (tk.type === "word" && i+2 < tokens.length &&
+        tokens[i+1].v === "." && tokens[i+2].type === "word" &&
+        !isKeyword(tokens[i].v) && !isKeyword(tokens[i+2].v)){
+      const ref = tk.v + "." + tokens[i+2].v;
+      const key = keyFor(ref);
+      addCol(tables, key, colOf(ref), "allCols");
+      i += 3; continue;
+    }
+    i++;
+  }
+}
+
+function resolveTableKey(tables, ref){
+  // ref is "alias.col" or "table.col" or "col" or "ctePrefix.alias.col"
+  if (!ref) return null;
+  const dot = ref.indexOf(".");
+  if (dot < 0) return tables.length ? tables[0].key : null;
+  const firstPart = stripTicks(ref.slice(0, dot)).toLowerCase();
+  // Try exact match on alias/name
+  let hit = tables.find(tb => tb.alias.toLowerCase() === firstPart || stripTicks(tb.name).toLowerCase() === firstPart);
+  if (hit) return hit.key;
+  // Try CTE-prefixed keys (e.g. alias "o" matches key "customer_spending.o")
+  hit = tables.find(tb => tb.key.endsWith("." + firstPart));
+  if (hit) return hit.key;
+  // Try full key match (for refs like "ctePrefix.alias.col")
+  hit = tables.find(tb => tb.key === firstPart || tb.key.endsWith("." + firstPart));
+  return hit ? hit.key : firstPart;
+}
+
+function parseOnPairs(toks){
+  // expect: A.x = B.y  (optionally multiple joined by AND)
+  const pairs = [];
+  let depth = 0, cur = [];
+  // split on top-level AND
+  const segs = [];
+  for (const t of toks){
+    if (t.v === "(") depth++; else if (t.v === ")") depth--;
+    if (depth === 0 && t.type === "word" && t.v.toLowerCase() === "and") { segs.push(cur); cur = []; }
+    else cur.push(t);
+  }
+  if (cur.length) segs.push(cur);
+  segs.forEach(seg => {
+    const eq = seg.findIndex(t => t.v === "=");
+    if (eq > 0) {
+      const left = toText(seg.slice(0, eq));
+      const right = toText(seg.slice(eq+1));
+      pairs.push({ left, right });
+    }
+  });
+  return pairs;
+}
+
+// ---------- helpers ----------
+function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function extractFirstTable(toks) {
+  // find table name word, then optional alias
+  let i = 0;
+  while (i < toks.length && toks[i].v.toLowerCase() === "(" ) { i++; }
+  // skip leading subquery/opening
+  let name = null, alias = null;
+  for (let j=0;j<toks.length;j++){
+    const isBacktick = toks[j].v.startsWith("`") && toks[j].v.endsWith("`");
+    if ((toks[j].type==="word" && !isKeyword(toks[j].v) && toks[j].v!=="(") || isBacktick) {
+      name = toks[j].v;
+      // BigQuery: a backtick-quoted identifier may contain dots
+      // (e.g. `project.dataset.table`) — keep it intact.
+      if (name.startsWith("`") && name.endsWith("`")) {
+        // strip the backticks for a cleaner label
+        name = name.slice(1, -1);
+      }
+      // BigQuery: UNNEST(array) — mark as a table-like source
+      else if (name.toLowerCase() === "unnest") {
+        // capture the array expression up to the closing paren
+        let depth = 0, expr = [];
+        for (let k = j; k < toks.length; k++) {
+          if (toks[k].v === "(") depth++;
+          else if (toks[k].v === ")") { depth--; if (depth === 0) { expr.push(toks[k]); break; } }
+          expr.push(toks[k]);
+        }
+        name = toText(expr);
+        // look for alias after the closing paren
+        // find the position of the closing paren in the original token list
+        let closeIdx = j;
+        let d = 0;
+        for (let k = j; k < toks.length; k++) {
+          if (toks[k].v === "(") d++;
+          else if (toks[k].v === ")") { d--; if (d === 0) { closeIdx = k; break; } }
+        }
+        const afterClose = toks[closeIdx + 1];
+        if (afterClose) {
+          if (afterClose.v.toLowerCase() === "as" && toks[closeIdx + 2]) alias = toks[closeIdx + 2].v;
+          else if (afterClose.type === "word" && !isKeyword(afterClose.v)) alias = afterClose.v;
+        }
+      }
+      // alias: next word if not keyword, or after AS
+      // (skip for UNNEST — alias was already captured above after the closing paren)
+      if (!alias) {
+        const nx = toks[j+1];
+        if (nx) {
+          if (nx.v.toLowerCase() === "as" && toks[j+2]) alias = toks[j+2].v;
+          else if (nx.type === "word" && !isKeyword(nx.v)) alias = nx.v;
+        }
+      }
+      break;
+    }
+  }
+  return { name, alias: alias || name };
+}
+
+function detectJoinKind(jc) {
+  // the join modifier is part of the clause head keyword, e.g. "left join"
+  const head = jc.kw.split(" ");
+  let kind = "INNER";
+  for (const w of head) {
+    if (w === "join") break;
+    if (JOIN_MODS.includes(w)) kind = w.toUpperCase();
+  }
+  if (kind === "OUTER") kind = "FULL";
+  return kind;
+}
+
+function containsAgg(toks){
+  return toks.some(t => t.type==="word" && isAgg(t.v));
+}
+
+function renderConditions(toks){
+  // split by top-level AND / OR
+  const parts = [];
+  let depth=0, cur=[];
+  for (const t of toks){
+    if (t.v==="(") depth++; else if (t.v===")") depth--;
+    if (depth===0 && t.type==="word" && /^(and|or)$/i.test(t.v)){
+      parts.push({ conj: t.v.toLowerCase(), toks: cur }); cur=[];
+    } else cur.push(t);
+  }
+  if (cur.length) parts.push({ conj: null, toks: cur });
+  let html = "";
+  parts.forEach((p,idx)=>{
+    if (idx>0 && p.conj) html += ` <span class="chip kw">${p.conj.toUpperCase()}</span> `;
+    html += `<span class="chip cond">${esc(toText(p.toks))}</span>`;
+  });
+  return html;
+}
+
+function renderCase(toks){
+  // find WHEN ... THEN ... ELSE ... END
+  let html = `<div class="case-box">`;
+  let i=0;
+  while (i<toks.length){
+    const t = toks[i];
+    if (t.v.toLowerCase()==="when"){
+      let cond=[]; i++;
+      while(i<toks.length && toks[i].v.toLowerCase()!=="then"){ cond.push(toks[i]); i++; }
+      html += `<div><span class="when">WHEN</span> <span class="chip cond">${esc(toText(cond))}</span> `;
+    } else if (t.v.toLowerCase()==="then"){
+      let res=[]; i++;
+      while(i<toks.length && !["when","else","end"].includes(toks[i].v.toLowerCase())){ res.push(toks[i]); i++; }
+      html += `<span class="then">THEN</span> <span class="chip col">${esc(toText(res))}</span></div>`;
+    } else if (t.v.toLowerCase()==="else"){
+      let res=[]; i++;
+      while(i<toks.length && toks[i].v.toLowerCase()!=="end"){ res.push(toks[i]); i++; }
+      html += `<div><span class="else">ELSE</span> <span class="chip col">${esc(toText(res))}</span></div>`;
+    } else if (t.v.toLowerCase()==="end"){
+      i++;
+    } else if (t.v.toLowerCase()==="case"){
+      html += `<span class="chip case">CASE</span> `; i++;
+    } else {
+      i++;
+    }
+  }
+  html += `</div>`;
+  return html;
+}
+
+// ---------- render ----------
+function render(stages){
+  const el = document.getElementById("pipeline");
+  if (!stages.length){
+    el.innerHTML = `<div class="empty-state">No recognizable clauses found. Try a SELECT statement.</div>`;
+    return;
+  }
+  let html = "";
+  stages.forEach((s,idx)=>{
+    html += `<div class="stage">
+      <div class="stage-head">
+        <div class="stage-num">${idx+1}</div>
+        <div class="stage-title">${esc(s.title)}</div>
+        <div class="stage-type">${esc(s.type)}</div>
+      </div>
+      <div class="stage-desc">${s.desc}</div>
+      <div class="stage-body">${s.body}</div>
+    </div>`;
+    if (idx < stages.length-1) html += `<div class="arrow"></div>`;
+  });
+  el.innerHTML = html;
+  el.scrollTop = 0;
+}
+
+// ---------- ER diagram rendering ----------
+// Implements the blueprint: 24px grid, layered BFS column layout with
+// barycenter sorting, straight join paths, facing side-ports, color-coded
+// join types, midpoint badges and port dots.
+const GRID_SIZE = 24;
+const TABLE_WIDTH = 224;
+const HEADER_HEIGHT = 44;
+const ROW_HEIGHT = 32;
+const COL_SPACING = 288;   // min horizontal column spacing
+const MIN_GAP = 48;        // min vertical gap between stacked tables (2 dots)
+const ROOT_LEFT = true;    // first column drawn on the left
+
+const JOIN_COLORS = {
+  INNER: "#4f46e5",
+  LEFT:  "#10b981",
+  RIGHT: "#f59e0b",
+  FULL:  "#ec4899",
+  CROSS: "#a855f7",
+  SUBQUERY_LINK: "#8b5cf6",
+  LINK:  "#8b5cf6"
+};
+const JOIN_DEFAULT_COLOR = "#94a3b8";
+
+function snap(v){ return Math.round(v / GRID_SIZE) * GRID_SIZE; }
+function tableHeight(t){ return HEADER_HEIGHT + t.dispCols.length * ROW_HEIGHT; }
+
+function renderER(er){
+  const el = document.getElementById("erDiagram");
+  if (!er || !er.tables.length){
+    el.innerHTML = `<div class="er-empty">JOIN relationships will appear here.</div>`;
+    return;
+  }
+
+  // display set = all columns when the toggle is on, else just join columns
+  const showAll = document.getElementById("erAllCols") &&
+                  document.getElementById("erAllCols").checked;
+  er.tables.forEach(t => {
+    const display = showAll ? t.allCols : t.cols;
+    t.dispCols = display && display.length ? display.slice() : ["*"];
+  });
+
+  const n = er.tables.length;
+  const idxOf = (key) => er.tables.findIndex(t => t.key === key);
+  const edges = er.links
+    .map(l => ({ a: idxOf(l.from), b: idxOf(l.to), l }))
+    .filter(e => e.a >= 0 && e.b >= 0);
+
+  // --- adjacency list (undirected) ---
+  const adj = Array.from({ length: n }, () => []);
+  edges.forEach(e => { adj[e.a].push(e.b); adj[e.b].push(e.a); });
+  const degree = (i) => adj[i].length;
+
+  // --- find connected components ---
+  const compOf = new Array(n).fill(-1);
+  const comps = [];
+  for (let i=0;i<n;i++){
+    if (compOf[i] !== -1) continue;
+    const q = [i]; compOf[i] = comps.length;
+    const nodes = [];
+    while (q.length){
+      const u = q.pop(); nodes.push(u);
+      adj[u].forEach(v => { if (compOf[v] === -1){ compOf[v] = compOf[u]; q.push(v); } });
+    }
+    comps.push(nodes);
+  }
+
+  // --- layered BFS layout per component (column index layers 0,1,2...) ---
+  const colOf = new Array(n).fill(-1);   // horizontal layer
+  const rowOf = new Array(n).fill(0);    // vertical stack index
+
+  // count edge crossings for a layered layout (within adjacent columns)
+  function countCrossings(){
+    let total = 0;
+    const byCol = {};
+    for (let u=0; u<n; u++){
+      const c = colOf[u];
+      (byCol[c] = byCol[c] || []).push(u);
+    }
+    const colKeys = Object.keys(byCol).map(Number).sort((a,b)=>a-b);
+    for (let k=0; k+1<colKeys.length; k++){
+      const L = byCol[colKeys[k]].slice().sort((a,b)=> rowOf[a]-rowOf[b]);
+      const R = byCol[colKeys[k+1]].slice().sort((a,b)=> rowOf[a]-rowOf[b]);
+      const edgesLR = [];
+      L.forEach((u, i) => adj[u].forEach(v => { if (colOf[v]===colKeys[k+1]) edgesLR.push([i, R.indexOf(v)]); }));
+      for (let a=0; a<edgesLR.length; a++)
+        for (let b=a+1; b<edgesLR.length; b++)
+          if ((edgesLR[a][0]-edgesLR[b][0]) * (edgesLR[a][1]-edgesLR[b][1]) < 0) total++;
+    }
+    return total;
+  }
+
+  let compStartCol = 0;
+  comps.forEach(nodes => {
+    // try several candidate roots and keep the layered layout with fewest crossings
+    const candidates = nodes.slice().sort((a,b)=> degree(b)-degree(a)).slice(0, Math.min(5, nodes.length));
+    let best = null;
+
+    function layoutFromRoot(root){
+      const cOf = new Array(n).fill(-1);
+      const rOf = new Array(n).fill(0);
+      const q = [root]; cOf[root] = 0;
+      while (q.length){
+        const u = q.shift();
+        // visit neighbors in descending degree first to keep chains tidy
+        adj[u].slice().sort((a,b)=> degree(b)-degree(a)).forEach(v => {
+          if (cOf[v] === -1){ cOf[v] = cOf[u] + 1; q.push(v); }
+        });
+      }
+      nodes.forEach(u => { if (cOf[u] === -1) cOf[u] = 1; });
+
+      const maxCol = Math.max(...nodes.map(u => cOf[u]));
+      const cols = Array.from({ length: maxCol+1 }, () => []);
+      nodes.forEach(u => cols[cOf[u]].push(u));
+      cols.forEach(c => c.sort((a,b)=> a-b));
+
+      function barycenter(u, dir){
+        const targetCol = cOf[u] + dir;
+        const ns = adj[u].filter(v => cOf[v] === targetCol);
+        if (!ns.length) return rOf[u];
+        return ns.reduce((s,v)=> s + rOf[v], 0) / ns.length;
+      }
+      for (let pass=0; pass<10; pass++){
+        const forward = pass % 2 === 0;
+        const order = forward ? [...cols.keys()] : [...cols.keys()].reverse();
+        for (const ci of order){
+          const list = cols[ci];
+          const withB = list.map(u => ({ u, b: barycenter(u, forward ? -1 : 1) }));
+          withB.sort((p,q) => p.b - q.b);
+          cols[ci] = withB.map(x => x.u);
+          cols[ci].forEach((u,k)=> rOf[u] = k);
+        }
+      }
+      // stack vertically with MIN_GAP
+      cols.forEach(list => {
+        let yCursor = 0;
+        list.forEach(u => {
+          rOf[u] = yCursor;
+          yCursor += tableHeight(er.tables[u]) + MIN_GAP;
+        });
+      });
+      // count crossings using a temp projection
+      const savedCol = colOf.slice(), savedRow = rowOf.slice();
+      nodes.forEach(u => { colOf[u] = cOf[u]; rowOf[u] = rOf[u]; });
+      const x = countCrossings();
+      nodes.forEach(u => { colOf[u] = savedCol[u]; rowOf[u] = savedRow[u]; });
+      return { cOf, rOf, maxCol, cols, x };
+    }
+
+    candidates.forEach(root => {
+      const lay = layoutFromRoot(root);
+      if (!best || lay.x < best.x) best = lay;
+    });
+    if (!best) best = layoutFromRoot(nodes[0]);
+
+    const { cOf, rOf, maxCol, cols } = best;
+    nodes.forEach(u => { colOf[u] = cOf[u]; rowOf[u] = rOf[u]; });
+
+    // record component width to offset next component
+    compStartCol += (maxCol + 1);
+    cols.forEach((list, ci) => list.forEach(u => { colOf[u] += compStartCol - (maxCol+1); }));
+    compStartCol += 4; // 4-dot component gap => 96px
+  });
+
+  // --- convert col/row into pixel coordinates ---
+  const pos = er.tables.map((t,i)=>({
+    x: snap(colOf[i] * COL_SPACING),
+    y: snap(rowOf[i])
+  }));
+
+  // --- bounds ---
+  let minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9;
+  er.tables.forEach((t,i)=>{
+    minX=Math.min(minX,pos[i].x); minY=Math.min(minY,pos[i].y);
+    maxX=Math.max(maxX,pos[i].x+TABLE_WIDTH); maxY=Math.max(maxY,pos[i].y+tableHeight(t));
+  });
+  const PAD = 24;
+  const offX = PAD - minX, offY = PAD - minY;
+  er.tables.forEach((_,i)=>{ pos[i].x+=offX; pos[i].y+=offY; });
+  const svgW = maxX - minX + PAD*2;
+  const svgH = maxY - minY + PAD*2;
+
+  function getPortCoordinates(i, col, faceRight){
+    const t = er.tables[i];
+    const ci = t.dispCols.indexOf(col);
+    const x = faceRight ? pos[i].x + TABLE_WIDTH : pos[i].x;
+    const y = pos[i].y + HEADER_HEIGHT + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2;
+    return { x, y };
+  }
+
+  let svg = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">`;
+  svg += `<defs>
+    <filter id="erGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge>
+      <feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="erSubqGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#161224"/><stop offset="100%" stop-color="#0c0a14"/>
+    </linearGradient>
+  </defs>`;
+
+  // --- join paths (drawn first, behind cards) ---
+  edges.forEach(ed => {
+    const l = ed.l;
+    const color = JOIN_COLORS[(l.kind||"").toUpperCase()] || JOIN_DEFAULT_COLOR;
+    // face the nearer neighbor: target to the right => leave from right edge
+    const aCx = pos[ed.a].x + TABLE_WIDTH/2;
+    const bCx = pos[ed.b].x + TABLE_WIDTH/2;
+    const aRight = bCx >= aCx;
+    const bRight = aCx >= bCx;
+    const p1 = getPortCoordinates(ed.a, l.leftCol, aRight);
+    const p2 = getPortCoordinates(ed.b, l.rightCol, bRight);
+    const mid = { x: (p1.x+p2.x)/2, y: (p1.y+p2.y)/2 };
+
+    // invisible thick hit path + visible straight path + hover glow underlay
+    svg += `<g class="er-join" data-kind="${esc(l.kind||'')}" data-a="${esc(ed.a)}" data-b="${esc(ed.b)}" data-leftcol="${esc(l.leftCol||'')}" data-rightcol="${esc(l.rightCol||'')}">`;
+    svg += `<line class="er-hit" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="10"/>`;
+    svg += `<line class="er-glow" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="8" stroke-linecap="round" filter="url(#erGlow)"/>`;
+    svg += `<line class="er-line" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="2"/>`;
+    svg += `<circle class="er-port" cx="${p1.x}" cy="${p1.y}" r="4" fill="${color}"/>`;
+    svg += `<circle class="er-port" cx="${p2.x}" cy="${p2.y}" r="4" fill="${color}"/>`;
+    // midpoint badge
+    const darkKinds = new Set(["LEFT","RIGHT","FULL","CROSS"]);
+    const txtCls = darkKinds.has((l.kind||"").toUpperCase()) ? "er-badge-txt dark" : "er-badge-txt";
+    svg += `<g class="er-badge" transform="translate(${mid.x},${mid.y})">
+      <rect x="-26" y="-11" width="52" height="22" rx="11" fill="${color}"/>
+      <text x="0" y="4" text-anchor="middle" class="${txtCls}">${esc((l.kind||'LINK').toUpperCase())}</text>
+    </g>`;
+    svg += `</g>`;
+  });
+
+  // --- tables ---
+  er.tables.forEach((t, i) => {
+    const x = pos[i].x;
+    const y = pos[i].y;
+    const h = tableHeight(t);
+    const disp = t.alias && t.alias !== t.name ? `${t.alias} · ${t.name}` : t.name;
+    const originCls = t.origin === "subq" ? "subq" : (t.origin === "manual" ? "manual" : "");
+    svg += `<g class="er-table ${originCls}" data-idx="${i}" data-key="${esc(t.key)}">`;
+    svg += `<rect class="er-card ${originCls}" x="${x}" y="${y}" width="${TABLE_WIDTH}" height="${h}" rx="8" />`;
+    svg += `<path class="thead-rect" d="M ${x} ${y+8} a8,8 0 0 1 8,-8 h${TABLE_WIDTH-16} a8,8 0 0 1 8,8 v${HEADER_HEIGHT-8} h-${TABLE_WIDTH} z" />`;
+    // origin indicator dot
+    svg += `<circle class="er-origin ${originCls||'std'}" cx="${x+13}" cy="${y+HEADER_HEIGHT-15}" r="4" />`;
+    svg += `<text class="tname" x="${x+24}" y="${y+HEADER_HEIGHT-11}">${esc(disp)}</text>`;
+    t.dispCols.forEach((c, ci) => {
+      const rowY = y + HEADER_HEIGHT + ci*ROW_HEIGHT;
+      const cy = rowY + ROW_HEIGHT/2 + 5;
+      const isJoin = er.links.some(l =>
+        (l.from === t.key && l.leftCol === c) || (l.to === t.key && l.rightCol === c));
+      if (isJoin){
+        svg += `<rect class="er-joinrow" data-col="${esc(c)}" x="${x+2}" y="${rowY+2}" width="${TABLE_WIDTH-4}" height="${ROW_HEIGHT-4}" rx="4" />`;
+      }
+      // badges: PK (join key) + GRP/SORT/FILTER/CASE from colMeta
+      const badges = [];
+      if (isJoin) badges.push(["pk","primary key"]);
+      const meta = t.colMeta[c];
+      if (meta){
+        if (meta.has("grp")) badges.push(["grp","Group By"]);
+        if (meta.has("sort")) badges.push(["sort","Order By"]);
+        if (meta.has("filt")) badges.push(["filt","WHERE"]);
+        if (meta.has("case")) badges.push(["case","CASE"]);
+      }
+      // column name
+      svg += `<text class="trow${isJoin?' join-col':''}" data-col="${esc(c)}" x="${x+14}" y="${cy}">${esc(c)}</text>`;
+      // draw badges right-aligned
+      let bx = x + TABLE_WIDTH - 10;
+      for (let b=badges.length-1; b>=0; b--){
+        const [cls,label] = badges[b];
+        const w = 6 + label.length*5.6;
+        bx -= w;
+        svg += `<text class="er-cbadge ${cls}" x="${bx}" y="${cy}">${esc(label)}</text>`;
+      }
+    });
+    svg += `</g>`;
+  });
+
+  // --- CTE grouping background rects ---
+  const cteGroups = {};
+  er.tables.forEach((t, i) => {
+    if (t.cteName) {
+      if (!cteGroups[t.cteName]) cteGroups[t.cteName] = [];
+      cteGroups[t.cteName].push(i);
+    }
+  });
+  const CTE_PAD = 18;
+  Object.entries(cteGroups).forEach(([cteName, indices]) => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    indices.forEach(i => {
+      const t = er.tables[i];
+      minX = Math.min(minX, pos[i].x);
+      minY = Math.min(minY, pos[i].y);
+      maxX = Math.max(maxX, pos[i].x + TABLE_WIDTH);
+      maxY = Math.max(maxY, pos[i].y + tableHeight(t));
+    });
+    svg += `<rect class="er-cte-group" x="${minX - CTE_PAD}" y="${minY - CTE_PAD}" width="${maxX - minX + CTE_PAD*2}" height="${maxY - minY + CTE_PAD*2}" />`;
+    svg += `<text class="er-cte-label" x="${minX - CTE_PAD + 8}" y="${minY - CTE_PAD + 14}">${esc(cteName)}</text>`;
+  });
+
+  svg += `</svg>`;
+  el.innerHTML = svg;
+
+  // --- hover dimming: emphasize hovered table/join, fade the rest ---
+  const svgEl = el.querySelector("svg");
+  if (svgEl){
+    const tables = svgEl.querySelectorAll(".er-table");
+    const joins = svgEl.querySelectorAll(".er-join");
+    function focus(target){
+      svgEl.classList.add("has-hover");
+      if (target.classList.contains("er-join")){
+        const a = target.getAttribute("data-a");
+        const b = target.getAttribute("data-b");
+        const lcol = target.getAttribute("data-leftcol");
+        const rcol = target.getAttribute("data-rightcol");
+        tables.forEach(t => {
+          const idx = t.getAttribute("data-idx");
+          const involved = (idx === a || idx === b);
+          if (!involved) t.classList.add("faded");
+          else {
+            // highlight only the column used by THIS join; dim the rest
+            const myCol = ((idx === a) ? lcol : rcol) || "";
+            t.querySelectorAll("[data-col]").forEach(r => {
+              const c = (r.getAttribute("data-col") || "").toLowerCase();
+              if (c && myCol && c === myCol.toLowerCase()) r.classList.add("active");
+            });
+          }
+        });
+        joins.forEach(j => { if (j !== target) j.classList.add("faded"); });
+      } else {
+        // hovering a table: keep it and its joins visible, fade others
+        tables.forEach(t => { if (t !== target) t.classList.add("faded"); });
+        joins.forEach(j => { if (j !== target) j.classList.add("faded"); });
+      }
+    }
+    function blur(){
+      svgEl.classList.remove("has-hover");
+      tables.forEach(t => t.classList.remove("faded"));
+      joins.forEach(j => j.classList.remove("faded"));
+      svgEl.querySelectorAll(".active").forEach(r => r.classList.remove("active"));
+    }
+    tables.forEach(t => {
+      t.addEventListener("mouseenter", () => focus(t));
+      t.addEventListener("mouseleave", blur);
+    });
+    joins.forEach(j => {
+      j.addEventListener("mouseenter", () => focus(j));
+      j.addEventListener("mouseleave", blur);
+    });
+  }
+}
+
+function run(){
+  const sql = document.getElementById("sql").value.trim();
+  if (!sql){
+    document.getElementById("pipeline").innerHTML =
+      `<div class="empty-state">Run <b>Visualize</b> to break this query into logical execution stages.</div>`;
+    document.getElementById("erDiagram").innerHTML =
+      `<div class="er-empty">JOIN relationships will appear here.</div>`;
+    return;
+  }
+  try {
+    const { stages, er } = analyze(sql);
+    window.__lastER = er;
+    render(stages);
+    renderER(er);
+  } catch (e){
+    document.getElementById("pipeline").innerHTML =
+      `<div class="error">⚠ Could not parse query:\n${esc(e.message)}\n\n(Tip: this is a lightweight visualizer, not a full SQL engine.)</div>`;
+  }
+}
+
+// ---------- events ----------
+const erAllColsEl = document.getElementById("erAllCols");
+if (erAllColsEl) erAllColsEl.addEventListener("change", () => {
+  if (window.__lastER) renderER(window.__lastER);
+});
+document.getElementById("clearBtn").onclick = () => {
+  document.getElementById("sql").value = "";
+  document.getElementById("pipeline").innerHTML =
+    `<div class="empty-state">Run <b>Visualize</b> to break this query into logical execution stages.</div>`;
+  document.getElementById("erDiagram").innerHTML =
+    `<div class="er-empty">JOIN relationships will appear here.</div>`;
+};
+// Ctrl/Cmd+Enter to run
+document.getElementById("sql").addEventListener("keydown", e => {
+  if ((e.ctrlKey||e.metaKey) && e.key==="Enter"){ e.preventDefault(); run(); }
+});
+
+// live update as the user types (debounced)
+let __sqlTimer = null;
+document.getElementById("sql").addEventListener("input", () => {
+  clearTimeout(__sqlTimer);
+  __sqlTimer = setTimeout(run, 300);
+});
+
+// initial
+run();
+</script>
+</body>
+</html>
