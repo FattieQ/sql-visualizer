@@ -1415,7 +1415,7 @@ function renderER(scopes, targetId, activeIdx){
     const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
     // ideal edge length: kept as small as possible so tables sit close and the
     // join lines stay short, while the separation pass enforces a non-overlap gap.
-    const k = Math.max(COL_SPACING * 0.48, (hAvg + MIN_GAP) * 0.6);
+    const k = Math.max(COL_SPACING * 0.29, (hAvg + MIN_GAP) * 0.36);
 
     const px = {}, py = {};
     // deterministic initial placement: a square-ish grid by index
