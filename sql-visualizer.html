@@ -1323,6 +1323,7 @@ const HEADER_HEIGHT = 44;
 const ROW_HEIGHT = 32;
 const COL_SPACING = 288;   // min horizontal column spacing
 const MIN_GAP = 48;        // min vertical gap between stacked tables (2 dots)
+const SEP_GAP = 56;        // hard minimum gap enforced between any two tables
 const ROOT_LEFT = true;    // first column drawn on the left
 
 const JOIN_COLORS = {
@@ -1337,7 +1338,38 @@ const JOIN_COLORS = {
 const JOIN_DEFAULT_COLOR = "#94a3b8";
 
 function snap(v){ return Math.round(v / GRID_SIZE) * GRID_SIZE; }
-function tableHeight(t){ return HEADER_HEIGHT + t.dispCols.length * ROW_HEIGHT; }
+
+// Word-wrap a table's display name to fit inside TABLE_WIDTH. Returns an array
+// of lines. Uses an approximate per-character width for the mono header font.
+const NAME_CHAR_W = 7.4;            // approx px per char at 13px mono
+const NAME_MAX_W = TABLE_WIDTH - 34; // usable width (left dot/pad + right pad)
+const NAME_LINE_H = 16;             // line height for wrapped name
+function tableNameLines(t){
+  const disp = t.alias && t.alias !== t.name ? `${t.alias} · ${t.name}` : t.name;
+  const maxChars = Math.max(1, Math.floor(NAME_MAX_W / NAME_CHAR_W));
+  if (disp.length <= maxChars) return [disp];
+  const words = disp.split(/(\s+)/); // keep separators to rejoin
+  const lines = [];
+  let cur = "";
+  for (const w of words){
+    if ((cur + w).length <= maxChars){ cur += w; continue; }
+    if (cur.trim()) lines.push(cur.trim());
+    // hard-break a single token longer than a line
+    let rem = w;
+    while (rem.length > maxChars){
+      lines.push(rem.slice(0, maxChars));
+      rem = rem.slice(maxChars);
+    }
+    cur = rem;
+  }
+  if (cur.trim()) lines.push(cur.trim());
+  return lines.length ? lines : [disp];
+}
+function headerHeight(t){
+  const lines = tableNameLines(t).length;
+  return HEADER_HEIGHT + (lines - 1) * NAME_LINE_H;
+}
+function tableHeight(t){ return headerHeight(t) + t.dispCols.length * ROW_HEIGHT; }
 
 function renderER(scopes, targetId, activeIdx){
   const el = document.getElementById(targetId || "erDiagram");
@@ -1415,7 +1447,7 @@ function renderER(scopes, targetId, activeIdx){
     const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
     // ideal edge length: kept as small as possible so tables sit close and the
     // join lines stay short, while the separation pass enforces a non-overlap gap.
-    const k = Math.max(COL_SPACING * 0.29, (hAvg + MIN_GAP) * 0.36);
+    const k = Math.max(COL_SPACING * 0.42, (hAvg + MIN_GAP) * 0.5);
 
     const px = {}, py = {};
     // deterministic initial placement: a square-ish grid by index
@@ -1438,8 +1470,8 @@ function renderER(scopes, targetId, activeIdx){
           const u = nodes[a], v = nodes[b];
           let dx = px[u] - px[v], dy = py[u] - py[v];
           let dist = Math.hypot(dx, dy) || 0.01;
-          const minX = TABLE_WIDTH + 24;
-          const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + 16;
+          const minX = TABLE_WIDTH + SEP_GAP;
+          const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + SEP_GAP;
           let f = (k * k) / dist;
           if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 3; // prevent overlap
           const fx = (dx / dist) * f, fy = (dy / dist) * f;
@@ -1478,8 +1510,8 @@ function renderER(scopes, targetId, activeIdx){
           const u = nodes[a], v = nodes[b];
           const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
           const hu = tableHeight(er.tables[u]), hv = tableHeight(er.tables[v]);
-          const ox = (wu + wv) / 2 + 16 - Math.abs(px[u] - px[v]);
-          const oy = (hu + hv) / 2 + 16 - Math.abs(py[u] - py[v]);
+          const ox = (wu + wv) / 2 + SEP_GAP - Math.abs(px[u] - px[v]);
+          const oy = (hu + hv) / 2 + SEP_GAP - Math.abs(py[u] - py[v]);
           if (ox > 0 && oy > 0){
             // move only the lower-degree node (ties: later index) so the
             // higher-degree hub stays anchored and the layout converges.
@@ -1534,8 +1566,8 @@ function renderER(scopes, targetId, activeIdx){
       for (let b = a + 1; b < n; b++){
         const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
         const hu = tableHeight(er.tables[a]), hv = tableHeight(er.tables[b]);
-        const ox = (wu + wv) / 2 + 16 - Math.abs(pos[a].x - pos[b].x);
-        const oy = (hu + hv) / 2 + 16 - Math.abs(pos[a].y - pos[b].y);
+        const ox = (wu + wv) / 2 + SEP_GAP - Math.abs(pos[a].x - pos[b].x);
+        const oy = (hu + hv) / 2 + SEP_GAP - Math.abs(pos[a].y - pos[b].y);
         if (ox > 0 && oy > 0){
           moved = true;
           const moveA = degree(a) < degree(b) || (degree(a) === degree(b) && a > b);
@@ -1560,7 +1592,7 @@ function renderER(scopes, targetId, activeIdx){
     const t = er.tables[i];
     const ci = t.dispCols.indexOf(col);
     const x = faceRight ? pos[i].x + TABLE_WIDTH : pos[i].x;
-    const y = pos[i].y + HEADER_HEIGHT + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2;
+    const y = pos[i].y + headerHeight(t) + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2;
     return { x, y };
   }
 
@@ -1609,16 +1641,19 @@ function renderER(scopes, targetId, activeIdx){
     const x = pos[i].x;
     const y = pos[i].y;
     const h = tableHeight(t);
-    const disp = t.alias && t.alias !== t.name ? `${t.alias} · ${t.name}` : t.name;
+    const hh = headerHeight(t);
+    const nameLines = tableNameLines(t);
     const originCls = t.origin === "subq" ? "subq" : (t.origin === "manual" ? "manual" : "");
     svg += `<g class="er-table ${originCls}" data-idx="${i}" data-key="${esc(t.key)}">`;
     svg += `<rect class="er-card ${originCls}" x="${x}" y="${y}" width="${TABLE_WIDTH}" height="${h}" rx="8" />`;
-    svg += `<path class="thead-rect" d="M ${x} ${y+8} a8,8 0 0 1 8,-8 h${TABLE_WIDTH-16} a8,8 0 0 1 8,8 v${HEADER_HEIGHT-8} h-${TABLE_WIDTH} z" />`;
-    // origin indicator dot
-    svg += `<circle class="er-origin ${originCls||'std'}" cx="${x+13}" cy="${y+HEADER_HEIGHT-15}" r="4" />`;
-    svg += `<text class="tname" x="${x+24}" y="${y+HEADER_HEIGHT-11}">${esc(disp)}</text>`;
+    svg += `<path class="thead-rect" d="M ${x} ${y+8} a8,8 0 0 1 8,-8 h${TABLE_WIDTH-16} a8,8 0 0 1 8,8 v${hh-8} h-${TABLE_WIDTH} z" />`;
+    // origin indicator dot (aligned with the first name line)
+    svg += `<circle class="er-origin ${originCls||'std'}" cx="${x+13}" cy="${y+18}" r="4" />`;
+    nameLines.forEach((line, li) => {
+      svg += `<text class="tname" x="${x+24}" y="${y+22+li*NAME_LINE_H}">${esc(line)}</text>`;
+    });
     t.dispCols.forEach((c, ci) => {
-      const rowY = y + HEADER_HEIGHT + ci*ROW_HEIGHT;
+      const rowY = y + hh + ci*ROW_HEIGHT;
       const cy = rowY + ROW_HEIGHT/2 + 5;
       const isJoin = er.links.some(l =>
         (l.from === t.key && l.leftCol === c) || (l.to === t.key && l.rightCol === c));
