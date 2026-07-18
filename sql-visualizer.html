@@ -771,24 +771,6 @@ function buildER(sources, allTokens, cteNames){
   sources.forEach((s, idx) => {
     const isSubq = cteNames.includes(stripTicks(s.name).toLowerCase()) || s.isSubquery;
     const key = addTable(s.name, s.alias, isSubq ? "subq" : "std", null);
-    if (s.isSubquery && s.innerToks && s.innerToks.length) {
-      // expand the inner SELECT's own FROM/JOIN sources into the ER
-      const innerSources = extractSourcesFromTokens(s.innerToks);
-      innerSources.forEach((inner, ii) => {
-        const innerName = stripTicks(inner.name).toLowerCase();
-        const innerIsSubq = cteNames.includes(innerName);
-        const iKey = addTable(inner.name, inner.alias, innerIsSubq ? "subq" : "std", null);
-        addLink(key, iKey, null, null, null, null, inner.joinKind || "SUBQUERY_LINK");
-        if (ii > 0 && inner.onToks) {
-          const pairs = parseOnPairs(inner.onToks);
-          pairs.forEach(p => {
-            const fromKey = resolveTableKey(tables, p.left);
-            const toKey = resolveTableKey(tables, p.right);
-            addLink(fromKey, toKey, p.left, p.right, colOf(p.left), colOf(p.right), inner.joinKind);
-          });
-        }
-      });
-    }
     if (idx > 0) {
       const pairs = s.onToks ? parseOnPairs(s.onToks) : [];
       if (pairs.length) {
