@@ -146,6 +146,30 @@
   .er-head { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
   .er-toggle { font-size: 11px; color: var(--muted); padding: 0 14px 2px 0; cursor: pointer; user-select: none; }
   .er-toggle input { vertical-align: -1px; margin-right: 4px; accent-color: var(--accent); }
+  /* ER tab bar */
+  .er-tabs {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    padding: 8px 14px 4px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .er-tab {
+    background: var(--panel-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--font-ui);
+    transition: all .15s;
+  }
+  .er-tab:hover { border-color: var(--accent); color: var(--accent); }
+  .er-tab.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .er-tab.subq { border-left: 3px solid var(--purple); }
+  .er-tab.cte { border-left: 3px solid var(--cyan); }
   .er-head button {
     background: var(--panel-2);
     color: var(--text);
@@ -728,15 +752,74 @@ function analyze(sql) {
     });
   }
 
-  // ----- build ER relationship model from data sources -----
+  // ----- build ER relationship model, one scope per query/subquery/CTE -----
   const cteNames = collectCTENames(tokens);
-  const er = buildER(dataSourceOrder, tokens, cteNames);
+  const scopes = buildScopes(tokens, cteNames);
 
-  return { stages, er };
+  return { stages, scopes };
 }
 
-// Build an entity-relationship model: tables + the join links between them.
-function buildER(sources, allTokens, cteNames){
+// Collect every (SELECT ...) group in the query (including CTE bodies and
+// nested subqueries) as an independent "scope" so each can be visualized on
+// its own tab. The main query is always the first scope.
+function collectQueryScopes(tokens, cteNames){
+  const scopes = [];
+  const seen = new Set();
+  const cteBodies = extractCTEBodies(tokens);
+  function addScope(label, kind, bodyToks){
+    if (!bodyToks || !bodyToks.length) return;
+    const key = kind + "|" + toText(bodyToks).toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    scopes.push({ label, kind, bodyToks });
+  }
+  addScope("Main query", "main", tokens);
+  // walk the token stream looking for balanced "( SELECT ... )" groups
+  for (let i = 0; i < tokens.length; i++){
+    if (tokens[i].v === "(" && i + 1 < tokens.length && tokens[i+1].v.toLowerCase() === "select"){
+      let d = 1, j = i + 1;
+      for (; j < tokens.length; j++){
+        if (tokens[j].v === "(") d++;
+        else if (tokens[j].v === ")"){ d--; if (d === 0) break; }
+      }
+      const bodyToks = tokens.slice(i + 1, j); // excludes the outer parens
+      // alias follows the closing paren: ") [AS] alias"
+      let label = "subquery", kind = "subq";
+      const after = tokens[j + 1];
+      if (after){
+        if (after.v.toLowerCase() === "as" && tokens[j + 2]) label = stripTicks(tokens[j + 2].v);
+        else if (after.type === "word" && !isKeyword(after.v)) label = stripTicks(after.v);
+      }
+      // if this body is a named CTE, label it as such
+      if (cteNames && cteBodies){
+        for (const [cn, cb] of Object.entries(cteBodies)){
+          if (toText(cb).toLowerCase() === toText(bodyToks).toLowerCase()){
+            label = cn; kind = "cte"; break;
+          }
+        }
+      }
+      addScope(label, kind, bodyToks);
+    }
+  }
+  return scopes;
+}
+
+// Build all scopes (main query + each subquery/CTE) as independent ER models.
+function buildScopes(tokens, cteNames){
+  const raw = collectQueryScopes(tokens, cteNames);
+  return raw.map((sc, idx) => ({
+    label: sc.label,
+    kind: sc.kind,
+    index: idx,
+    er: buildScopeER(sc.bodyToks, cteNames)
+  }));
+}
+
+// Build an entity-relationship model for a single scope (one query body):
+// tables + the real JOIN links within that scope. Subquery/CTE sources appear
+// as opaque derived-table nodes (their internals live on their own tab), so no
+// phantom "contains" links are drawn.
+function buildScopeER(bodyToks, cteNames){
   const tables = [];
   const seen = new Set();
   const links = [];
@@ -767,7 +850,8 @@ function buildER(sources, allTokens, cteNames){
     addCol(tables, toKey, rightCol, "cols");
   }
 
-  // --- Process main query sources ---
+  // --- Process this scope's own FROM/JOIN sources ---
+  const sources = extractSourcesFromTokens(bodyToks);
   sources.forEach((s, idx) => {
     const isSubq = cteNames.includes(stripTicks(s.name).toLowerCase()) || s.isSubquery;
     const key = addTable(s.name, s.alias, isSubq ? "subq" : "std", null);
@@ -785,69 +869,10 @@ function buildER(sources, allTokens, cteNames){
     }
   });
 
-  // --- Expand CTE internals ---
-  if (allTokens && cteNames.length) {
-    const cteBodies = extractCTEBodies(allTokens);
-    const processed = new Set(); // prevent infinite recursion on self-referencing CTEs
-
-    function expandCTE(cteName) {
-      if (processed.has(cteName)) return;
-      processed.add(cteName);
-      const bodyToks = cteBodies[cteName];
-      if (!bodyToks) return;
-
-      // Extract FROM/JOIN sources from this CTE body
-      const cteSources = extractSourcesFromTokens(bodyToks);
-
-      cteSources.forEach((s, idx) => {
-        const srcName = stripTicks(s.name).toLowerCase();
-        const isNestedCTE = cteNames.includes(srcName) && srcName !== cteName;
-
-        // If this source is another CTE, recurse into it first
-        if (isNestedCTE) expandCTE(srcName);
-
-        const isSubqRef = cteNames.includes(srcName);
-        const key = addTable(s.name, s.alias, isSubqRef ? "subq" : "cte", cteName);
-
-        if (idx > 0) {
-          const pairs = s.onToks ? parseOnPairs(s.onToks) : [];
-          if (pairs.length) {
-            pairs.forEach(p => {
-              // Resolve each side of the ON condition to a table key
-              // Handle both "alias.col" and "ctePrefix.alias.col" formats
-              function resolveSide(ref) {
-                if (!ref) return tables[0]?.key;
-                const dotIdx = ref.indexOf(".");
-                if (dotIdx < 0) return tables[0]?.key;
-                const alias = stripTicks(ref.slice(0, dotIdx)).toLowerCase();
-                // Try direct alias/name match
-                let hit = tables.find(tb => tb.alias.toLowerCase() === alias || stripTicks(tb.name).toLowerCase() === alias);
-                if (hit) return hit.key;
-                // Try CTE-prefixed match (e.g. alias "o" matches key "customer_spending.o")
-                hit = tables.find(tb => tb.key.endsWith("." + alias));
-                return hit ? hit.key : tables[0]?.key;
-              }
-              const fromKey = resolveSide(p.left);
-              const toKey = resolveSide(p.right) || key;
-              addLink(fromKey, toKey, p.left, p.right, colOf(p.left), colOf(p.right), s.joinKind);
-            });
-          } else {
-            addLink(tables[0].key, key, null, null, null, null, s.joinKind);
-          }
-        }
-      });
-    }
-
-    // Expand all CTEs that are referenced by main query tables
-    const mainCTEs = sources.filter(s => cteNames.includes(stripTicks(s.name).toLowerCase()))
-                             .map(s => stripTicks(s.name).toLowerCase());
-    mainCTEs.forEach(cteName => expandCTE(cteName));
-  }
-
-  // grab every referenced column across the whole query
-  if (allTokens) collectAllColumns(allTokens, tables);
+  // grab every referenced column within this scope
+  collectAllColumns(bodyToks, tables);
   // attach per-column metadata badges (GRP / SORT / FILTER / CASE / PK)
-  annotateColumns(tables, allTokens, cteNames);
+  annotateColumns(tables, bodyToks, cteNames);
   return { tables, links };
 }
 
@@ -1314,10 +1339,31 @@ const JOIN_DEFAULT_COLOR = "#94a3b8";
 function snap(v){ return Math.round(v / GRID_SIZE) * GRID_SIZE; }
 function tableHeight(t){ return HEADER_HEIGHT + t.dispCols.length * ROW_HEIGHT; }
 
-function renderER(er, targetId){
+function renderER(scopes, targetId, activeIdx){
   const el = document.getElementById(targetId || "erDiagram");
-  if (!er || !er.tables.length){
+  if (!scopes || !scopes.length){
     el.innerHTML = `<div class="er-empty">JOIN relationships will appear here.</div>`;
+    return;
+  }
+  if (activeIdx == null || activeIdx < 0 || activeIdx >= scopes.length) activeIdx = 0;
+  const scope = scopes[activeIdx];
+  const er = scope.er;
+
+  // tab bar (only when there is more than one scope)
+  let tabsHtml = "";
+  if (scopes.length > 1){
+    tabsHtml = `<div class="er-tabs">`;
+    scopes.forEach((sc, i) => {
+      const cls = i === activeIdx ? "er-tab active" : "er-tab " + (sc.kind || "");
+      tabsHtml += `<button class="${cls}" data-scope="${i}">${esc(sc.label)}</button>`;
+    });
+    tabsHtml += `</div>`;
+  }
+
+  // empty scope
+  if (!er || !er.tables.length){
+    el.innerHTML = tabsHtml + `<div class="er-empty">No tables in this query.</div>`;
+    wireERTabs(el, targetId, scopes);
     return;
   }
 
@@ -1590,7 +1636,8 @@ function renderER(er, targetId){
   });
 
   svg += `</svg>`;
-  el.innerHTML = svg;
+  el.innerHTML = tabsHtml + svg;
+  wireERTabs(el, targetId, scopes);
 
   // --- hover dimming: emphasize hovered table/join, fade the rest ---
   const svgEl = el.querySelector("svg");
@@ -1641,6 +1688,17 @@ function renderER(er, targetId){
   }
 }
 
+// wire up tab clicks inside a rendered ER container
+function wireERTabs(el, targetId, scopes){
+  el.querySelectorAll(".er-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = parseInt(btn.getAttribute("data-scope"), 10);
+      window.__erActiveScope = i;
+      renderERBoth();
+    });
+  });
+}
+
 function run(){
   const sql = document.getElementById("sql").value.trim();
   if (!sql){
@@ -1651,29 +1709,35 @@ function run(){
     return;
   }
   try {
-    const { stages, er } = analyze(sql);
-    window.__lastER = er;
+    const { stages, scopes } = analyze(sql);
+    window.__erScopes = scopes;
+    window.__erActiveScope = 0;
     render(stages);
-    renderER(er);
-    if (window.__erFullscreen) renderER(er, "erDiagramFs");
+    renderERBoth();
   } catch (e){
     document.getElementById("pipeline").innerHTML =
       `<div class="error">⚠ Could not parse query:\n${esc(e.message)}\n\n(Tip: this is a lightweight visualizer, not a full SQL engine.)</div>`;
   }
 }
 
+// render the ER diagram into both the inline panel and (if open) the fullscreen overlay
+function renderERBoth(){
+  if (!window.__erScopes) return;
+  renderER(window.__erScopes, "erDiagram", window.__erActiveScope || 0);
+  if (window.__erFullscreen) renderER(window.__erScopes, "erDiagramFs", window.__erActiveScope || 0);
+}
+
 // ---------- events ----------
 const erAllColsEl = document.getElementById("erAllCols");
 if (erAllColsEl) erAllColsEl.addEventListener("change", () => {
-  if (window.__lastER) renderER(window.__lastER);
-  if (window.__lastER && window.__erFullscreen) renderER(window.__lastER, "erDiagramFs");
+  renderERBoth();
 });
 
 // ----- ER full screen -----
 function openERFullscreen(){
-  if (!window.__lastER) return;
+  if (!window.__erScopes) return;
   window.__erFullscreen = true;
-  renderER(window.__lastER, "erDiagramFs");
+  renderERBoth();
   const ov = document.getElementById("erFullscreenOverlay");
   if (ov) ov.classList.add("open");
 }
