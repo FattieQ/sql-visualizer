@@ -1413,8 +1413,9 @@ function renderER(scopes, targetId, activeIdx){
     const set = new Set(nodes);
     const compEdges = edges.filter(e => set.has(e.a) && set.has(e.b));
     const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
-    // ideal edge length: balance horizontal/vertical spacing
-    const k = Math.max(COL_SPACING, (hAvg + MIN_GAP) * 1.4);
+    // ideal edge length: tight so the diagram stays compact, but large enough
+    // that the join badge + ports remain readable.
+    const k = Math.max(COL_SPACING * 0.6, (hAvg + MIN_GAP) * 0.85);
 
     const px = {}, py = {};
     // deterministic initial placement: a square-ish grid by index
@@ -1422,7 +1423,7 @@ function renderER(scopes, targetId, activeIdx){
     nodes.forEach((u, idx) => {
       const gx = idx % side;
       const gy = Math.floor(idx / side);
-      px[u] = gx * (TABLE_WIDTH + COL_SPACING);
+      px[u] = gx * (TABLE_WIDTH + COL_SPACING * 0.6);
       py[u] = gy * (hAvg + MIN_GAP);
     });
 
@@ -1437,8 +1438,8 @@ function renderER(scopes, targetId, activeIdx){
           const u = nodes[a], v = nodes[b];
           let dx = px[u] - px[v], dy = py[u] - py[v];
           let dist = Math.hypot(dx, dy) || 0.01;
-          const minX = TABLE_WIDTH + 40;
-          const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + MIN_GAP;
+          const minX = TABLE_WIDTH + 24;
+          const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + 16;
           let f = (k * k) / dist;
           if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 4; // prevent overlap
           const fx = (dx / dist) * f, fy = (dy / dist) * f;
@@ -1451,7 +1452,7 @@ function renderER(scopes, targetId, activeIdx){
         const u = e.a, v = e.b;
         let dx = px[u] - px[v], dy = py[u] - py[v];
         let dist = Math.hypot(dx, dy) || 0.01;
-        const f = (dist * dist) / k;
+        const f = (dist * dist) / (k * 0.85);
         const fx = (dx / dist) * f, fy = (dy / dist) * f;
         dispX[u] -= fx; dispY[u] -= fy;
         dispX[v] += fx; dispY[v] += fy;
@@ -1467,16 +1468,16 @@ function renderER(scopes, targetId, activeIdx){
     }
 
     // hard bounding-box separation pass to guarantee no overlaps
-    for (let pass = 0; pass < 30; pass++){
+    for (let pass = 0; pass < 80; pass++){
       for (let a = 0; a < m; a++){
         for (let b = a + 1; b < m; b++){
           const u = nodes[a], v = nodes[b];
           const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
           const hu = tableHeight(er.tables[u]), hv = tableHeight(er.tables[v]);
           const ox = (wu + wv) / 2 + 24 - Math.abs(px[u] - px[v]);
-          const oy = (hu + hv) / 2 + MIN_GAP - Math.abs(py[u] - py[v]);
+          const oy = (hu + hv) / 2 + 16 - Math.abs(py[u] - py[v]);
           if (ox > 0 && oy > 0){
-            // push apart along the axis of least penetration
+            // push apart along the axis of least penetration (resolve fully)
             if (ox < oy){
               const dir = px[u] < px[v] ? -1 : 1;
               px[u] += dir * ox / 2; px[v] -= dir * ox / 2;
@@ -1484,6 +1485,14 @@ function renderER(scopes, targetId, activeIdx){
               const dir = py[u] < py[v] ? -1 : 1;
               py[u] += dir * oy / 2; py[v] -= dir * oy / 2;
             }
+          } else if (ox > 0){
+            // horizontally overlapping but not vertically: nudge apart on x
+            const dir = px[u] < px[v] ? -1 : 1;
+            px[u] += dir * ox / 2; px[v] -= dir * ox / 2;
+          } else if (oy > 0){
+            // vertically overlapping but not horizontally: nudge apart on y
+            const dir = py[u] < py[v] ? -1 : 1;
+            py[u] += dir * oy / 2; py[v] -= dir * oy / 2;
           }
         }
       }
@@ -1504,7 +1513,7 @@ function renderER(scopes, targetId, activeIdx){
       maxY = Math.max(maxY, py[u] + tableHeight(er.tables[u]));
     });
     // advance horizontal offset by this component's width + gap
-    const span = (maxX / Math.max(1, k)) * COL_SPACING + COL_SPACING * 2;
+    const span = maxX + COL_SPACING * 0.8;
     offsetX += span;
   });
 
