@@ -1323,7 +1323,6 @@ const HEADER_HEIGHT = 44;
 const ROW_HEIGHT = 32;
 const COL_SPACING = 288;   // min horizontal column spacing
 const MIN_GAP = 48;        // min vertical gap between stacked tables (2 dots)
-const JOIN_INSET = 36;     // shorten each join line end by this many px (gap to card)
 const ROOT_LEFT = true;    // first column drawn on the left
 
 const JOIN_COLORS = {
@@ -1414,9 +1413,9 @@ function renderER(scopes, targetId, activeIdx){
     const set = new Set(nodes);
     const compEdges = edges.filter(e => set.has(e.a) && set.has(e.b));
     const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
-    // ideal edge length: tight so the diagram stays compact, but large enough
-    // that the join badge + ports remain readable.
-    const k = Math.max(COL_SPACING * 0.6, (hAvg + MIN_GAP) * 0.85);
+    // ideal edge length: kept as small as possible so tables sit close and the
+    // join lines stay short, while the separation pass enforces a non-overlap gap.
+    const k = Math.max(COL_SPACING * 0.48, (hAvg + MIN_GAP) * 0.6);
 
     const px = {}, py = {};
     // deterministic initial placement: a square-ish grid by index
@@ -1424,7 +1423,7 @@ function renderER(scopes, targetId, activeIdx){
     nodes.forEach((u, idx) => {
       const gx = idx % side;
       const gy = Math.floor(idx / side);
-      px[u] = gx * (TABLE_WIDTH + COL_SPACING * 0.6);
+      px[u] = gx * (TABLE_WIDTH + COL_SPACING * 0.45);
       py[u] = gy * (hAvg + MIN_GAP);
     });
 
@@ -1442,7 +1441,7 @@ function renderER(scopes, targetId, activeIdx){
           const minX = TABLE_WIDTH + 24;
           const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + 16;
           let f = (k * k) / dist;
-          if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 4; // prevent overlap
+          if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 3; // prevent overlap
           const fx = (dx / dist) * f, fy = (dy / dist) * f;
           dispX[u] += fx; dispY[u] += fy;
           dispX[v] -= fx; dispY[v] -= fy;
@@ -1453,7 +1452,7 @@ function renderER(scopes, targetId, activeIdx){
         const u = e.a, v = e.b;
         let dx = px[u] - px[v], dy = py[u] - py[v];
         let dist = Math.hypot(dx, dy) || 0.01;
-        const f = (dist * dist) / (k * 0.85);
+        const f = (dist * dist) / (k * 0.72);
         const fx = (dx / dist) * f, fy = (dy / dist) * f;
         dispX[u] -= fx; dispY[u] -= fy;
         dispX[v] += fx; dispY[v] += fy;
@@ -1469,14 +1468,14 @@ function renderER(scopes, targetId, activeIdx){
     }
 
     // hard bounding-box separation pass to guarantee no overlaps
-    for (let pass = 0; pass < 80; pass++){
+    for (let pass = 0; pass < 120; pass++){
       for (let a = 0; a < m; a++){
         for (let b = a + 1; b < m; b++){
           const u = nodes[a], v = nodes[b];
           const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
           const hu = tableHeight(er.tables[u]), hv = tableHeight(er.tables[v]);
           const ox = (wu + wv) / 2 + 24 - Math.abs(px[u] - px[v]);
-          const oy = (hu + hv) / 2 + 16 - Math.abs(py[u] - py[v]);
+          const oy = (hu + hv) / 2 + 20 - Math.abs(py[u] - py[v]);
           if (ox > 0 && oy > 0){
             // push apart along the axis of least penetration (resolve fully)
             if (ox < oy){
@@ -1560,22 +1559,14 @@ function renderER(scopes, targetId, activeIdx){
     const p1 = getPortCoordinates(ed.a, l.leftCol, aRight);
     const p2 = getPortCoordinates(ed.b, l.rightCol, bRight);
     const mid = { x: (p1.x+p2.x)/2, y: (p1.y+p2.y)/2 };
-    // shorten the line by pulling both ends inward toward the midpoint,
-    // leaving a visible gap between the line and the table cards.
-    const dx = p2.x - p1.x, dy = p2.y - p1.y;
-    const segLen = Math.hypot(dx, dy) || 1;
-    const inset = Math.min(JOIN_INSET, segLen / 2 - 4);
-    const ux = dx / segLen, uy = dy / segLen;
-    const s1 = { x: p1.x + ux * inset, y: p1.y + uy * inset };
-    const s2 = { x: p2.x - ux * inset, y: p2.y - uy * inset };
 
     // invisible thick hit path + visible straight path + hover glow underlay
     svg += `<g class="er-join" data-kind="${esc(l.kind||'')}" data-a="${esc(ed.a)}" data-b="${esc(ed.b)}" data-leftcol="${esc(l.leftCol||'')}" data-rightcol="${esc(l.rightCol||'')}">`;
-    svg += `<line class="er-hit" x1="${s1.x}" y1="${s1.y}" x2="${s2.x}" y2="${s2.y}" stroke="transparent" stroke-width="10"/>`;
-    svg += `<line class="er-glow" x1="${s1.x}" y1="${s1.y}" x2="${s2.x}" y2="${s2.y}" stroke="${color}" stroke-width="8" stroke-linecap="round" filter="url(#erGlow)"/>`;
-    svg += `<line class="er-line" x1="${s1.x}" y1="${s1.y}" x2="${s2.x}" y2="${s2.y}" stroke="${color}" stroke-width="2"/>`;
-    svg += `<circle class="er-port" cx="${s1.x}" cy="${s1.y}" r="4" fill="${color}"/>`;
-    svg += `<circle class="er-port" cx="${s2.x}" cy="${s2.y}" r="4" fill="${color}"/>`;
+    svg += `<line class="er-hit" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="10"/>`;
+    svg += `<line class="er-glow" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="8" stroke-linecap="round" filter="url(#erGlow)"/>`;
+    svg += `<line class="er-line" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="2"/>`;
+    svg += `<circle class="er-port" cx="${p1.x}" cy="${p1.y}" r="4" fill="${color}"/>`;
+    svg += `<circle class="er-port" cx="${p2.x}" cy="${p2.y}" r="4" fill="${color}"/>`;
     // midpoint badge
     const darkKinds = new Set(["LEFT","RIGHT","FULL","CROSS"]);
     const txtCls = darkKinds.has((l.kind||"").toUpperCase()) ? "er-badge-txt dark" : "er-badge-txt";
