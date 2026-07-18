@@ -146,6 +146,44 @@
   .er-head { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
   .er-toggle { font-size: 11px; color: var(--muted); padding: 0 14px 2px 0; cursor: pointer; user-select: none; }
   .er-toggle input { vertical-align: -1px; margin-right: 4px; accent-color: var(--accent); }
+  .er-head button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all .15s;
+  }
+  .er-head button:hover { border-color: var(--accent); color: var(--accent); }
+  /* full-screen ER overlay */
+  body.er-fullscreen .er-head { position: sticky; top: 0; background: var(--panel); z-index: 5; }
+  #erFullscreenOverlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: var(--bg);
+    display: none; flex-direction: column;
+  }
+  #erFullscreenOverlay.open { display: flex; }
+  #erFullscreenOverlay .er-fs-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+    flex-shrink: 0;
+  }
+  #erFullscreenOverlay .er-fs-head .label { padding: 0; }
+  #erFullscreenOverlay .er {
+    flex: 1; overflow: auto;
+    background-color: #060608;
+    background-image: radial-gradient(#1c1c21 1px, transparent 1px);
+    background-size: 24px 24px; background-position: 12px 12px;
+    padding: 14px;
+  }
+  #erFullscreenOverlay button {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); padding: 6px 12px;
+    border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  #erFullscreenOverlay button:hover { border-color: var(--accent); color: var(--accent); }
   .sql-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
   .label {
     font-size: 11px;
@@ -336,7 +374,10 @@
       <div class="sql-wrap" id="erWrap" style="min-height:38%;flex:1 1 38%;">
         <div class="er-head">
           <div class="label" style="padding:8px 14px 4px;">Table Relationships (from JOINs)</div>
-          <label class="er-toggle"><input type="checkbox" id="erAllCols"> Show all columns</label>
+          <span style="display:flex;align-items:center;gap:12px;">
+            <label class="er-toggle"><input type="checkbox" id="erAllCols"> Show all columns</label>
+            <button id="erFullscreen" title="Toggle full screen">⛶ Full screen</button>
+          </span>
         </div>
         <div id="erDiagram" class="er"></div>
       </div>
@@ -356,6 +397,14 @@
       <span><i style="background:var(--red)"></i>aggregate</span>
     </div>
   </div>
+</div>
+
+<div id="erFullscreenOverlay">
+  <div class="er-fs-head">
+    <div class="label">Table Relationships (from JOINs) — full screen</div>
+    <button id="erFullscreenExit">✕ Exit full screen (Esc)</button>
+  </div>
+  <div id="erDiagramFs" class="er"></div>
 </div>
 
 <script>
@@ -1283,8 +1332,8 @@ const JOIN_DEFAULT_COLOR = "#94a3b8";
 function snap(v){ return Math.round(v / GRID_SIZE) * GRID_SIZE; }
 function tableHeight(t){ return HEADER_HEIGHT + t.dispCols.length * ROW_HEIGHT; }
 
-function renderER(er){
-  const el = document.getElementById("erDiagram");
+function renderER(er, targetId){
+  const el = document.getElementById(targetId || "erDiagram");
   if (!er || !er.tables.length){
     el.innerHTML = `<div class="er-empty">JOIN relationships will appear here.</div>`;
     return;
@@ -1323,108 +1372,113 @@ function renderER(er){
     comps.push(nodes);
   }
 
-  // --- layered BFS layout per component (column index layers 0,1,2...) ---
-  const colOf = new Array(n).fill(-1);   // horizontal layer
-  const rowOf = new Array(n).fill(0);    // vertical stack index
+  // --- force-directed layout per component ---
+  // Replaces the old strict column layout. Tables are pushed apart by
+  // repulsion, pulled together along joins, and separated so that a hub
+  // joined to many tables fans out in a square/rectangle instead of a line,
+  // keeping inter-join links visible.
+  const pos = er.tables.map(() => ({ x: 0, y: 0 }));
 
-  // count edge crossings for a layered layout (within adjacent columns)
-  function countCrossings(){
-    let total = 0;
-    const byCol = {};
-    for (let u=0; u<n; u++){
-      const c = colOf[u];
-      (byCol[c] = byCol[c] || []).push(u);
-    }
-    const colKeys = Object.keys(byCol).map(Number).sort((a,b)=>a-b);
-    for (let k=0; k+1<colKeys.length; k++){
-      const L = byCol[colKeys[k]].slice().sort((a,b)=> rowOf[a]-rowOf[b]);
-      const R = byCol[colKeys[k+1]].slice().sort((a,b)=> rowOf[a]-rowOf[b]);
-      const edgesLR = [];
-      L.forEach((u, i) => adj[u].forEach(v => { if (colOf[v]===colKeys[k+1]) edgesLR.push([i, R.indexOf(v)]); }));
-      for (let a=0; a<edgesLR.length; a++)
-        for (let b=a+1; b<edgesLR.length; b++)
-          if ((edgesLR[a][0]-edgesLR[b][0]) * (edgesLR[a][1]-edgesLR[b][1]) < 0) total++;
-    }
-    return total;
-  }
+  function layoutComponent(nodes){
+    const m = nodes.length;
+    if (m === 0) return;
+    const set = new Set(nodes);
+    const compEdges = edges.filter(e => set.has(e.a) && set.has(e.b));
+    const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
+    // ideal edge length: balance horizontal/vertical spacing
+    const k = Math.max(COL_SPACING, (hAvg + MIN_GAP) * 1.4);
 
-  let compStartCol = 0;
-  comps.forEach(nodes => {
-    // try several candidate roots and keep the layered layout with fewest crossings
-    const candidates = nodes.slice().sort((a,b)=> degree(b)-degree(a)).slice(0, Math.min(5, nodes.length));
-    let best = null;
+    const px = {}, py = {};
+    // deterministic initial placement: a square-ish grid by index
+    const side = Math.ceil(Math.sqrt(m));
+    nodes.forEach((u, idx) => {
+      const gx = idx % side;
+      const gy = Math.floor(idx / side);
+      px[u] = gx * (TABLE_WIDTH + COL_SPACING);
+      py[u] = gy * (hAvg + MIN_GAP);
+    });
 
-    function layoutFromRoot(root){
-      const cOf = new Array(n).fill(-1);
-      const rOf = new Array(n).fill(0);
-      const q = [root]; cOf[root] = 0;
-      while (q.length){
-        const u = q.shift();
-        // visit neighbors in descending degree first to keep chains tidy
-        adj[u].slice().sort((a,b)=> degree(b)-degree(a)).forEach(v => {
-          if (cOf[v] === -1){ cOf[v] = cOf[u] + 1; q.push(v); }
-        });
-      }
-      nodes.forEach(u => { if (cOf[u] === -1) cOf[u] = 1; });
-
-      const maxCol = Math.max(...nodes.map(u => cOf[u]));
-      const cols = Array.from({ length: maxCol+1 }, () => []);
-      nodes.forEach(u => cols[cOf[u]].push(u));
-      cols.forEach(c => c.sort((a,b)=> a-b));
-
-      function barycenter(u, dir){
-        const targetCol = cOf[u] + dir;
-        const ns = adj[u].filter(v => cOf[v] === targetCol);
-        if (!ns.length) return rOf[u];
-        return ns.reduce((s,v)=> s + rOf[v], 0) / ns.length;
-      }
-      for (let pass=0; pass<10; pass++){
-        const forward = pass % 2 === 0;
-        const order = forward ? [...cols.keys()] : [...cols.keys()].reverse();
-        for (const ci of order){
-          const list = cols[ci];
-          const withB = list.map(u => ({ u, b: barycenter(u, forward ? -1 : 1) }));
-          withB.sort((p,q) => p.b - q.b);
-          cols[ci] = withB.map(x => x.u);
-          cols[ci].forEach((u,k)=> rOf[u] = k);
+    let temp = k * 2.2;
+    const iters = 500;
+    for (let it = 0; it < iters; it++){
+      const dispX = {}, dispY = {};
+      nodes.forEach(u => { dispX[u] = 0; dispY[u] = 0; });
+      // repulsion between every pair (scaled up when boxes overlap)
+      for (let a = 0; a < m; a++){
+        for (let b = a + 1; b < m; b++){
+          const u = nodes[a], v = nodes[b];
+          let dx = px[u] - px[v], dy = py[u] - py[v];
+          let dist = Math.hypot(dx, dy) || 0.01;
+          const minX = TABLE_WIDTH + 40;
+          const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + MIN_GAP;
+          let f = (k * k) / dist;
+          if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 4; // prevent overlap
+          const fx = (dx / dist) * f, fy = (dy / dist) * f;
+          dispX[u] += fx; dispY[u] += fy;
+          dispX[v] -= fx; dispY[v] -= fy;
         }
       }
-      // stack vertically with MIN_GAP
-      cols.forEach(list => {
-        let yCursor = 0;
-        list.forEach(u => {
-          rOf[u] = yCursor;
-          yCursor += tableHeight(er.tables[u]) + MIN_GAP;
-        });
+      // attraction along join edges
+      compEdges.forEach(e => {
+        const u = e.a, v = e.b;
+        let dx = px[u] - px[v], dy = py[u] - py[v];
+        let dist = Math.hypot(dx, dy) || 0.01;
+        const f = (dist * dist) / k;
+        const fx = (dx / dist) * f, fy = (dy / dist) * f;
+        dispX[u] -= fx; dispY[u] -= fy;
+        dispX[v] += fx; dispY[v] += fy;
       });
-      // count crossings using a temp projection
-      const savedCol = colOf.slice(), savedRow = rowOf.slice();
-      nodes.forEach(u => { colOf[u] = cOf[u]; rowOf[u] = rOf[u]; });
-      const x = countCrossings();
-      nodes.forEach(u => { colOf[u] = savedCol[u]; rowOf[u] = savedRow[u]; });
-      return { cOf, rOf, maxCol, cols, x };
+      // move, capped by cooling temperature
+      nodes.forEach(u => {
+        const d = Math.hypot(dispX[u], dispY[u]) || 0.01;
+        const lim = Math.min(d, temp);
+        px[u] += (dispX[u] / d) * lim;
+        py[u] += (dispY[u] / d) * lim;
+      });
+      temp *= 0.985;
     }
 
-    candidates.forEach(root => {
-      const lay = layoutFromRoot(root);
-      if (!best || lay.x < best.x) best = lay;
+    // hard bounding-box separation pass to guarantee no overlaps
+    for (let pass = 0; pass < 30; pass++){
+      for (let a = 0; a < m; a++){
+        for (let b = a + 1; b < m; b++){
+          const u = nodes[a], v = nodes[b];
+          const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
+          const hu = tableHeight(er.tables[u]), hv = tableHeight(er.tables[v]);
+          const ox = (wu + wv) / 2 + 24 - Math.abs(px[u] - px[v]);
+          const oy = (hu + hv) / 2 + MIN_GAP - Math.abs(py[u] - py[v]);
+          if (ox > 0 && oy > 0){
+            // push apart along the axis of least penetration
+            if (ox < oy){
+              const dir = px[u] < px[v] ? -1 : 1;
+              px[u] += dir * ox / 2; px[v] -= dir * ox / 2;
+            } else {
+              const dir = py[u] < py[v] ? -1 : 1;
+              py[u] += dir * oy / 2; py[v] -= dir * oy / 2;
+            }
+          }
+        }
+      }
+    }
+
+    return { px, py, k };
+  }
+
+  // lay out each component, then offset them so they don't collide globally
+  let offsetX = 0;
+  comps.forEach(nodes => {
+    const { px, py, k } = layoutComponent(nodes);
+    let maxX = -1e9, maxY = -1e9;
+    nodes.forEach(u => {
+      pos[u].x = snap(px[u] + offsetX);
+      pos[u].y = snap(py[u]);
+      maxX = Math.max(maxX, px[u] + TABLE_WIDTH);
+      maxY = Math.max(maxY, py[u] + tableHeight(er.tables[u]));
     });
-    if (!best) best = layoutFromRoot(nodes[0]);
-
-    const { cOf, rOf, maxCol, cols } = best;
-    nodes.forEach(u => { colOf[u] = cOf[u]; rowOf[u] = rOf[u]; });
-
-    // record component width to offset next component
-    compStartCol += (maxCol + 1);
-    cols.forEach((list, ci) => list.forEach(u => { colOf[u] += compStartCol - (maxCol+1); }));
-    compStartCol += 4; // 4-dot component gap => 96px
+    // advance horizontal offset by this component's width + gap
+    const span = (maxX / Math.max(1, k)) * COL_SPACING + COL_SPACING * 2;
+    offsetX += span;
   });
-
-  // --- convert col/row into pixel coordinates ---
-  const pos = er.tables.map((t,i)=>({
-    x: snap(colOf[i] * COL_SPACING),
-    y: snap(rowOf[i])
-  }));
 
   // --- bounds ---
   let minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9;
@@ -1619,6 +1673,7 @@ function run(){
     window.__lastER = er;
     render(stages);
     renderER(er);
+    if (window.__erFullscreen) renderER(er, "erDiagramFs");
   } catch (e){
     document.getElementById("pipeline").innerHTML =
       `<div class="error">⚠ Could not parse query:\n${esc(e.message)}\n\n(Tip: this is a lightweight visualizer, not a full SQL engine.)</div>`;
@@ -1629,7 +1684,30 @@ function run(){
 const erAllColsEl = document.getElementById("erAllCols");
 if (erAllColsEl) erAllColsEl.addEventListener("change", () => {
   if (window.__lastER) renderER(window.__lastER);
+  if (window.__lastER && window.__erFullscreen) renderER(window.__lastER, "erDiagramFs");
 });
+
+// ----- ER full screen -----
+function openERFullscreen(){
+  if (!window.__lastER) return;
+  window.__erFullscreen = true;
+  renderER(window.__lastER, "erDiagramFs");
+  const ov = document.getElementById("erFullscreenOverlay");
+  if (ov) ov.classList.add("open");
+}
+function closeERFullscreen(){
+  window.__erFullscreen = false;
+  const ov = document.getElementById("erFullscreenOverlay");
+  if (ov) ov.classList.remove("open");
+}
+const erFsBtn = document.getElementById("erFullscreen");
+if (erFsBtn) erFsBtn.addEventListener("click", openERFullscreen);
+const erFsExit = document.getElementById("erFullscreenExit");
+if (erFsExit) erFsExit.addEventListener("click", closeERFullscreen);
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && window.__erFullscreen) closeERFullscreen();
+});
+
 document.getElementById("clearBtn").onclick = () => {
   document.getElementById("sql").value = "";
   document.getElementById("pipeline").innerHTML =
