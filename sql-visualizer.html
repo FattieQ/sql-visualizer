@@ -339,6 +339,16 @@
   .case-box .when { color: var(--yellow); }
   .case-box .then { color: var(--cyan); }
   .case-box .else { color: var(--muted); }
+  .window-box {
+    background: var(--panel-2);
+    border-left: 3px solid var(--violet);
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin: 6px 0;
+    font-size: 12.5px;
+    font-family: monospace;
+  }
+  .window-box .over-title { color: var(--violet); font-weight: bold; }
   .order-dir { font-size: 11px; }
   .order-dir.asc { color: var(--green); }
   .order-dir.desc { color: var(--red); }
@@ -472,7 +482,7 @@ function isAgg(w){ return AGGREGATES.has(w.toLowerCase()); }
 // segment tokens into top-level clause groups.
 // Only the major clause heads start a new group; sub-keywords (AS, ON, BY,
 // ASC, DESC, AND, OR, ...) stay inside their parent clause.
-const JOIN_MODS = ["inner","left","right","full","outer","cross"];
+const JOIN_MODS = ["inner","left","right","full","outer","cross","natural"];
 const JOIN_HELP = {
   inner: "Keep only rows that match in BOTH tables.",
   left: "Keep all rows from the left table; fill unmatched right columns with NULL.",
@@ -553,23 +563,125 @@ function toText(toks){
 }
 
 // ---------- Main analysis ----------
-function analyze(sql) {
-  const tokens = tokenize(sql).filter(t => t.v !== ";");
+function containsWindowFunc(toks) {
+  for (let i = 0; i < toks.length - 1; i++) {
+    if (toks[i].type === "word" && toks[i].v.toLowerCase() === "over" && toks[i+1].v === "(") {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function renderWindowFunc(toks, overIdx) {
+  const funcToks = toks.slice(0, overIdx);
+  let depth = 0, openIdx = overIdx + 1;
+  let closeIdx = -1;
+  for (let k = openIdx; k < toks.length; k++) {
+    if (toks[k].v === "(") depth++;
+    else if (toks[k].v === ")") {
+      depth--;
+      if (depth === 0) { closeIdx = k; break; }
+    }
+  }
+  const specToks = closeIdx > 0 ? toks.slice(openIdx + 1, closeIdx) : [];
+  
+  let partToks = [], orderToks = [];
+  let currentKey = "";
+  for (let i = 0; i < specToks.length; i++) {
+    const t = specToks[i];
+    const w = t.v.toLowerCase();
+    if (w === "partition" && specToks[i+1] && specToks[i+1].v.toLowerCase() === "by") {
+      currentKey = "partition";
+      i++;
+    } else if (w === "order" && specToks[i+1] && specToks[i+1].v.toLowerCase() === "by") {
+      currentKey = "order";
+      i++;
+    } else {
+      if (currentKey === "partition") partToks.push(t);
+      else if (currentKey === "order") orderToks.push(t);
+    }
+  }
+
+  let html = `<div class="window-box">`;
+  html += `<div><span class="chip col">${esc(toText(funcToks))}</span> <span class="over-title">OVER</span></div>`;
+  if (partToks.length) {
+    const cols = splitTopLevelCommas(partToks).map(p => toText(p)).filter(Boolean);
+    html += `<div style="margin-top:4px;padding-left:12px;color:var(--muted);font-size:11.5px;">`;
+    html += `PARTITION BY ` + cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ");
+    html += `</div>`;
+  }
+  if (orderToks.length) {
+    const parts = splitTopLevelCommas(orderToks);
+    let orderHtml = "";
+    parts.forEach(p => {
+      let dir = "asc", toks = p;
+      if (toks.length >= 1) {
+        const last = toks[toks.length-1];
+        if (last.type === "word" && /^(asc|desc)$/i.test(last.v)) {
+          dir = last.v.toLowerCase(); toks = toks.slice(0, -1);
+        }
+      }
+      orderHtml += `<span class="chip col">${esc(toText(toks))}</span> <span class="order-dir ${dir}">${dir.toUpperCase()}</span> `;
+    });
+    html += `<div style="margin-top:4px;padding-left:12px;color:var(--muted);font-size:11.5px;">`;
+    html += `ORDER BY ` + orderHtml;
+    html += `</div>`;
+  }
+  if (!partToks.length && !orderToks.length && specToks.length) {
+    html += `<div style="margin-top:4px;padding-left:12px;color:var(--muted);font-size:11.5px;">`;
+    html += `<span class="chip cond">${esc(toText(specToks))}</span>`;
+    html += `</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function splitUnionLegs(tokens) {
+  const legs = [];
+  let cur = [];
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.v === "(") depth++;
+    else if (t.v === ")") depth--;
+
+    if (depth === 0 && t.type === "word" && ["union", "intersect", "except"].includes(t.v.toLowerCase())) {
+      let op = t.v.toUpperCase();
+      let next = tokens[i+1];
+      if (next && next.type === "word" && next.v.toLowerCase() === "all") {
+        op += " ALL";
+        i++;
+      }
+      legs.push({ toks: cur, nextOp: op });
+      cur = [];
+    } else {
+      cur.push(t);
+    }
+  }
+  if (cur.length) {
+    legs.push({ toks: cur, nextOp: null });
+  }
+  return legs;
+}
+
+function analyzeLeg(tokens, legPrefix = "") {
   const clauses = splitClauses(tokens);
   const stages = [];
 
-  // map clause keyword -> token group
   const get = (k) => clauses.find(c => c.kw === k || c.kw === k + " by");
-  const getIdx = (k) => clauses.findIndex(c => c.kw === k);
 
   // FROM + JOIN handling (data sources)
   const fromC = get("from");
   const joinCs = clauses.filter(c => c.kw.endsWith("join"));
   const dataSourceOrder = [];
   if (fromC) {
-    // first table expression is in FROM
-    const ft = extractFirstTable(fromC.toks);
-    dataSourceOrder.push(ft);
+    // Handle comma-separated tables in FROM (implicit cross joins)
+    const fromParts = splitTopLevelCommas(fromC.toks);
+    fromParts.forEach((part, idx) => {
+      const ft = extractFirstTable(part);
+      if (idx > 0) { ft.joinKind = "CROSS"; ft.onToks = null; }
+      dataSourceOrder.push(ft);
+    });
   }
   joinCs.forEach(jc => {
     const kind = detectJoinKind(jc);
@@ -577,7 +689,6 @@ function analyze(sql) {
     const onIdx = jc.toks.findIndex(t => t.v.toLowerCase() === "on");
     let onToks = onIdx >= 0 ? jc.toks.slice(onIdx + 1) : null;
     if (onToks) {
-      // drop any stray trailing join modifier that leaked past the condition
       while (onToks.length && JOIN_MODS.includes(onToks[onToks.length-1].v.toLowerCase())) onToks.pop();
     }
     dataSourceOrder.push({ ...tgt, joinKind: kind, onToks });
@@ -611,7 +722,7 @@ function analyze(sql) {
       joinViz += `</div>`;
     }
     stages.push({
-      title: "Data Sources (FROM / JOIN)",
+      title: legPrefix + "Data Sources (FROM / JOIN)",
       type: "from",
       desc,
       body: joinViz
@@ -622,7 +733,7 @@ function analyze(sql) {
   const whereC = get("where");
   if (whereC) {
     stages.push({
-      title: "Filter Rows (WHERE)",
+      title: legPrefix + "Filter Rows (WHERE)",
       type: "where",
       desc: "Keep only rows where the condition is true — runs <i>before</i> grouping.",
       body: renderConditions(whereC.toks)
@@ -636,14 +747,14 @@ function analyze(sql) {
     const rest = byIdx >= 0 ? groupC.toks.slice(byIdx+1) : groupC.toks;
     const cols = splitTopLevelCommas(rest).map(p => toText(p)).filter(Boolean);
     stages.push({
-      title: "Group Rows (GROUP BY)",
+      title: legPrefix + "Group Rows (GROUP BY)",
       type: "group",
       desc: "Collapse rows into groups sharing the same values in these columns, so aggregates compute per group.",
       body: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ")
     });
   }
 
-  // SELECT (projections) — show CASE & aggregates
+  // SELECT (projections)
   const selectC = get("select");
   if (selectC) {
     const distinct = selectC.toks[0] && selectC.toks[0].v.toLowerCase() === "distinct";
@@ -653,15 +764,18 @@ function analyze(sql) {
     if (distinct) body += `<span class="chip kw">DISTINCT</span> `;
     exprs.forEach(e => {
       const txt = toText(e);
+      const overIdx = containsWindowFunc(e);
       if (/case/i.test(txt)) {
         body += renderCase(e);
+      } else if (overIdx >= 0) {
+        body += renderWindowFunc(e, overIdx);
       } else {
         const agg = containsAgg(e);
         body += `<span class="chip ${agg?'agg':'col'}">${esc(txt)}</span> `;
       }
     });
     stages.push({
-      title: "Project Columns (SELECT)",
+      title: legPrefix + "Project Columns (SELECT)",
       type: "select",
       desc: "Choose which columns/expressions appear in the output." + (distinct ? " Remove duplicate result rows." : ""),
       body
@@ -672,18 +786,18 @@ function analyze(sql) {
   const havingC = get("having");
   if (havingC) {
     stages.push({
-      title: "Filter Groups (HAVING)",
+      title: legPrefix + "Filter Groups (HAVING)",
       type: "having",
       desc: "Like WHERE, but applied to <i>aggregated groups</i> — runs after GROUP BY.",
       body: renderConditions(havingC.toks)
     });
   }
 
-  // QUALIFY — filter on window functions (runs after window computation, before ORDER/LIMIT)
+  // QUALIFY
   const qualifyC = get("qualify");
   if (qualifyC) {
     stages.push({
-      title: "Filter Window Results (QUALIFY)",
+      title: legPrefix + "Filter Window Results (QUALIFY)",
       type: "qualify",
       desc: "BigQuery: filter rows based on the result of a window function (like WHERE, but for window outputs).",
       body: renderConditions(qualifyC.toks)
@@ -698,7 +812,6 @@ function analyze(sql) {
     const parts = splitTopLevelCommas(rest);
     let body = "";
     parts.forEach(p => {
-      // detect trailing asc/desc
       let dir = "asc", toks = p;
       if (toks.length >= 1) {
         const last = toks[toks.length-1];
@@ -709,7 +822,7 @@ function analyze(sql) {
       body += `<span class="chip col">${esc(toText(toks))}</span> <span class="order-dir ${dir}">${dir.toUpperCase()}</span> `;
     });
     stages.push({
-      title: "Sort Results (ORDER BY)",
+      title: legPrefix + "Sort Results (ORDER BY)",
       type: "order",
       desc: "Order the final result set by the columns above.",
       body
@@ -720,7 +833,7 @@ function analyze(sql) {
   const limitC = get("limit");
   if (limitC) {
     stages.push({
-      title: "Limit Rows (LIMIT)",
+      title: legPrefix + "Limit Rows (LIMIT)",
       type: "limit",
       desc: "Keep only the first <span class='chip kw'>" + esc(toText(limitC.toks)) + "</span> rows.",
       body: ""
@@ -734,27 +847,50 @@ function analyze(sql) {
     const rest = byIdx >= 0 ? clusterC.toks.slice(byIdx+1) : clusterC.toks;
     const cols = splitTopLevelCommas(rest).map(p => toText(p)).filter(Boolean);
     stages.push({
-      title: "Cluster By (CLUSTER BY)",
+      title: legPrefix + "Cluster By (CLUSTER BY)",
       type: "cluster",
       desc: "BigQuery: co-locate rows sharing these column values for storage/performance (applied before LIMIT).",
       body: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ")
     });
   }
 
-  // WINDOW — named window definitions
+  // WINDOW
   const windowC = get("window");
   if (windowC) {
     stages.push({
-      title: "Named Windows (WINDOW)",
+      title: legPrefix + "Named Windows (WINDOW)",
       type: "window",
       desc: "BigQuery: define reusable window specifications referenced by OVER(...) in SELECT.",
       body: `<span class="chip kw">${esc(toText(windowC.toks))}</span>`
     });
   }
 
-  // ----- build ER relationship model, one scope per query/subquery/CTE -----
+  return stages;
+}
+
+function analyze(sql) {
+  const tokens = tokenize(sql).filter(t => t.v !== ";");
   const cteNames = collectCTENames(tokens);
   const scopes = buildScopes(tokens, cteNames);
+
+  const legs = splitUnionLegs(tokens);
+  let stages = [];
+  if (legs.length === 1) {
+    stages = analyzeLeg(legs[0].toks);
+  } else {
+    legs.forEach((leg, idx) => {
+      const legStages = analyzeLeg(leg.toks, `[Leg ${idx+1}] `);
+      stages = stages.concat(legStages);
+      if (idx < legs.length - 1) {
+        stages.push({
+          title: `Combine Results (${leg.nextOp})`,
+          type: "union",
+          desc: `Combine the rows from the query legs above and below using <span class="chip kw">${esc(leg.nextOp)}</span>.`,
+          body: ""
+        });
+      }
+    });
+  }
 
   return { stages, scopes };
 }
@@ -881,18 +1017,22 @@ function collectCTENames(tokens){
   const names = [];
   for (let i=0;i<tokens.length;i++){
     if (tokens[i].type==="word" && tokens[i].v.toLowerCase()==="with"){
-      // scan forward for cte_name AS (
       let j = i+1;
+      // skip RECURSIVE keyword if present
+      if (j < tokens.length && tokens[j].v.toLowerCase() === "recursive") j++;
+      let depth = 0;
       while (j < tokens.length){
-        if (tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="("){
+        if (tokens[j].v === "(") depth++;
+        else if (tokens[j].v === ")") depth--;
+        if (depth === 0 && tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="("){
           const nm = stripTicks(tokens[j].v).toLowerCase();
-          // next should be AS then (
           if (tokens[j+1] && tokens[j+1].v.toLowerCase()==="as" &&
               tokens[j+2] && tokens[j+2].v==="("){
             if (!names.includes(nm)) names.push(nm);
           }
         }
-        if (tokens[j].v==="select") break; // stop at the main select
+        // only break on top-level SELECT (the main query body)
+        if (depth === 0 && tokens[j].v.toLowerCase()==="select") break;
         j++;
       }
     }
@@ -907,23 +1047,30 @@ function extractCTEBodies(tokens){
   for (let i=0;i<tokens.length;i++){
     if (tokens[i].type==="word" && tokens[i].v.toLowerCase()==="with"){
       let j = i+1;
+      // skip RECURSIVE keyword if present
+      if (j < tokens.length && tokens[j].v.toLowerCase() === "recursive") j++;
+      let scanDepth = 0;
       while (j < tokens.length){
-        // look for: cte_name AS (
-        if (tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="(" &&
+        if (tokens[j].v === "(") scanDepth++;
+        else if (tokens[j].v === ")") scanDepth--;
+        // look for: cte_name AS ( at top level only
+        if (scanDepth === 0 && tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="(" &&
             tokens[j+1] && tokens[j+1].v.toLowerCase()==="as" &&
             tokens[j+2] && tokens[j+2].v==="("){
           const nm = stripTicks(tokens[j].v).toLowerCase();
-          // capture balanced parens starting at the opening (
-          let depth = 0, bodyStart = j+2; // j+2 is the opening (
+          let depth = 0, bodyStart = j+2;
           for (let k = bodyStart; k < tokens.length; k++){
             if (tokens[k].v==="(") depth++;
             else if (tokens[k].v===")"){ depth--; if(depth===0){
-              bodies[nm] = tokens.slice(bodyStart+1, k); // +1 to skip opening paren
+              bodies[nm] = tokens.slice(bodyStart+1, k);
+              scanDepth = 0;
+              j = k;
               break;
             }}
           }
         }
-        if (tokens[j].v==="select") break;
+        // only break on top-level SELECT (the main query body)
+        if (scanDepth === 0 && tokens[j].v.toLowerCase()==="select") break;
         j++;
       }
     }
@@ -938,7 +1085,14 @@ function extractSourcesFromTokens(toks){
   const fromC = get("from");
   const joinCs = clauses.filter(c => c.kw.endsWith("join"));
   const sources = [];
-  if (fromC) sources.push(extractFirstTable(fromC.toks));
+  if (fromC) {
+    const fromParts = splitTopLevelCommas(fromC.toks);
+    fromParts.forEach((part, idx) => {
+      const tbl = extractFirstTable(part);
+      if (idx > 0) { tbl.joinKind = "CROSS"; tbl.onToks = null; }
+      sources.push(tbl);
+    });
+  }
   joinCs.forEach(jc => {
     const kind = detectJoinKind(jc);
     const tgt = extractFirstTable(jc.toks);
@@ -1114,9 +1268,9 @@ function resolveTableKey(tables, ref){
 
 function parseOnPairs(toks){
   // expect: A.x = B.y  (optionally multiple joined by AND)
+  // Also handles >=, <=, <>, !=, >, < and keyword operators (BETWEEN, LIKE, IN)
   const pairs = [];
   let depth = 0, cur = [];
-  // split on top-level AND
   const segs = [];
   for (const t of toks){
     if (t.v === "(") depth++; else if (t.v === ")") depth--;
@@ -1124,12 +1278,25 @@ function parseOnPairs(toks){
     else cur.push(t);
   }
   if (cur.length) segs.push(cur);
+  const CMP_OPS = new Set(["=", ">=", "<=", "<>", "!=", ">", "<"]);
   segs.forEach(seg => {
-    const eq = seg.findIndex(t => t.v === "=");
-    if (eq > 0) {
-      const left = toText(seg.slice(0, eq));
-      const right = toText(seg.slice(eq+1));
-      pairs.push({ left, right });
+    const opIdx = seg.findIndex(t => CMP_OPS.has(t.v));
+    if (opIdx > 0) {
+      const left = toText(seg.slice(0, opIdx));
+      const right = toText(seg.slice(opIdx+1));
+      pairs.push({ left, right, op: seg[opIdx].v });
+    } else {
+      // Fallback: extract qualified column references for BETWEEN, LIKE, IN etc.
+      const refs = [];
+      for (let k = 0; k < seg.length - 2; k++) {
+        if (seg[k].type === "word" && seg[k+1].v === "." && seg[k+2].type === "word" &&
+            !isKeyword(seg[k].v)) {
+          refs.push(seg[k].v + "." + seg[k+2].v);
+        }
+      }
+      if (refs.length >= 2) {
+        pairs.push({ left: refs[0], right: refs[1], op: "?" });
+      }
     }
   });
   return pairs;
@@ -1201,6 +1368,13 @@ function extractFirstTable(toks) {
         if (afterClose) {
           if (afterClose.v.toLowerCase() === "as" && toks[closeIdx + 2]) alias = toks[closeIdx + 2].v;
           else if (afterClose.type === "word" && !isKeyword(afterClose.v)) alias = afterClose.v;
+        }
+      } else {
+        // Consume multi-part dotted names (schema.table, catalog.schema.table)
+        while (j + 2 < toks.length && toks[j+1].v === "." &&
+               (toks[j+2].type === "word" || (toks[j+2].v.startsWith("`") && toks[j+2].v.endsWith("`")))) {
+          name += "." + stripTicks(toks[j+2].v);
+          j += 2;
         }
       }
       // alias: next word if not keyword, or after AS
@@ -1445,26 +1619,44 @@ function renderER(scopes, targetId, activeIdx){
     const set = new Set(nodes);
     const compEdges = edges.filter(e => set.has(e.a) && set.has(e.b));
     const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
-    // ideal edge length: kept as small as possible so tables sit close and the
-    // join lines stay short, while the separation pass enforces a non-overlap gap.
     const k = Math.max(COL_SPACING * 0.42, (hAvg + MIN_GAP) * 0.5);
 
     const px = {}, py = {};
-    // deterministic initial placement: a square-ish grid by index
-    const side = Math.ceil(Math.sqrt(m));
-    nodes.forEach((u, idx) => {
-      const gx = idx % side;
-      const gy = Math.floor(idx / side);
-      px[u] = gx * (TABLE_WIDTH + COL_SPACING * 0.45);
-      py[u] = gy * (hAvg + MIN_GAP);
+    // Radial initial placement using BFS starting from highest-degree node
+    let startNode = nodes[0];
+    let maxDeg = -1;
+    nodes.forEach(u => {
+      const deg = adj[u].filter(v => set.has(v)).length;
+      if (deg > maxDeg) {
+        maxDeg = deg;
+        startNode = u;
+      }
     });
+
+    const q = [startNode];
+    const placed = new Set([startNode]);
+    px[startNode] = 0;
+    py[startNode] = 0;
+
+    while (q.length) {
+      const u = q.shift();
+      const neighbors = adj[u].filter(v => set.has(v) && !placed.has(v));
+      const count = neighbors.length;
+      neighbors.forEach((v, idx) => {
+        const angle = (idx / count) * 2 * Math.PI;
+        px[v] = px[u] + k * Math.cos(angle);
+        py[v] = py[u] + k * Math.sin(angle);
+        placed.add(v);
+        q.push(v);
+      });
+    }
 
     let temp = k * 2.2;
     const iters = 500;
     for (let it = 0; it < iters; it++){
       const dispX = {}, dispY = {};
       nodes.forEach(u => { dispX[u] = 0; dispY[u] = 0; });
-      // repulsion between every pair (scaled up when boxes overlap)
+      // repulsion between every pair
       for (let a = 0; a < m; a++){
         for (let b = a + 1; b < m; b++){
           const u = nodes[a], v = nodes[b];
@@ -1473,7 +1665,7 @@ function renderER(scopes, targetId, activeIdx){
           const minX = TABLE_WIDTH + SEP_GAP;
           const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + SEP_GAP;
           let f = (k * k) / dist;
-          if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 3; // prevent overlap
+          if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 3;
           const fx = (dx / dist) * f, fy = (dy / dist) * f;
           dispX[u] += fx; dispY[u] += fy;
           dispX[v] -= fx; dispY[v] -= fy;
@@ -1489,7 +1681,34 @@ function renderER(scopes, targetId, activeIdx){
         dispX[u] -= fx; dispY[u] -= fy;
         dispX[v] += fx; dispY[v] += fy;
       });
-      // move, capped by cooling temperature
+      // edge-crossing penalty/repulsion: push nodes away from join lines
+      compEdges.forEach(e => {
+        const u = e.a, v = e.b;
+        nodes.forEach(w => {
+          if (w === u || w === v) return;
+          const x0 = px[w], y0 = py[w];
+          const x1 = px[u], y1 = py[u];
+          const x2 = px[v], y2 = py[v];
+          const dx = x2 - x1, dy = y2 - y1;
+          const l2 = dx*dx + dy*dy;
+          if (l2 < 10) return;
+          let t = ((x0 - x1)*dx + (y0 - y1)*dy) / l2;
+          t = Math.max(0, Math.min(1, t));
+          const pxClosest = x1 + t*dx;
+          const pyClosest = y1 + t*dy;
+          const dist = Math.hypot(x0 - pxClosest, y0 - pyClosest) || 0.01;
+          const minClearance = TABLE_WIDTH * 0.8;
+          if (dist < minClearance) {
+            const f = (minClearance - dist) * 0.12;
+            const fx = ((x0 - pxClosest) / dist) * f;
+            const fy = ((y0 - pyClosest) / dist) * f;
+            dispX[w] += fx; dispY[w] += fy;
+            dispX[u] -= fx * 0.5; dispY[u] -= fy * 0.5;
+            dispX[v] -= fx * 0.5; dispY[v] -= fy * 0.5;
+          }
+        });
+      });
+      // move
       nodes.forEach(u => {
         const d = Math.hypot(dispX[u], dispY[u]) || 0.01;
         const lim = Math.min(d, temp);
@@ -1499,11 +1718,7 @@ function renderER(scopes, targetId, activeIdx){
       temp *= 0.985;
     }
 
-    // hard bounding-box separation pass: only resolve TRUE overlaps (both
-    // axes penetrate). Tables may share a row or column (sit side-by-side or
-    // stacked) as long as their rectangles don't actually intersect. To avoid
-    // symmetric oscillation, move only the lower-degree table out of each
-    // overlap (the hub stays put), which converges reliably.
+    // hard bounding-box separation pass
     for (let pass = 0; pass < 600; pass++){
       let worst = 0;
       for (let a = 0; a < m; a++){
@@ -1515,8 +1730,6 @@ function renderER(scopes, targetId, activeIdx){
           const oy = (hu + hv) / 2 + SEP_GAP - Math.abs(py[u] - py[v]);
           if (ox > 0 && oy > 0){
             worst = Math.max(worst, Math.min(ox, oy));
-            // split the push between both tables so one can't be shoved into a
-            // third; converges to a truly overlap-free arrangement.
             if (ox < oy){
               const dir = px[u] <= px[v] ? -1 : 1;
               px[u] += dir * ox / 2; px[v] -= dir * ox / 2;
@@ -1533,21 +1746,48 @@ function renderER(scopes, targetId, activeIdx){
     return { px, py, k };
   }
 
-  // lay out each component, then offset them so they don't collide globally
+  // Separate components into connected (>= 2 tables) and singletons
+  const connectedComps = comps.filter(nodes => nodes.length > 1);
+  const singletonComps = comps.filter(nodes => nodes.length === 1);
+
   let offsetX = 0;
-  comps.forEach(nodes => {
+  let globalMaxY = 0;
+  let globalMaxX = 0;
+
+  connectedComps.forEach(nodes => {
     const { px, py, k } = layoutComponent(nodes);
-    let maxX = -1e9, maxY = -1e9;
+    let maxX = -1e9;
     nodes.forEach(u => {
       pos[u].x = px[u] + offsetX;
       pos[u].y = py[u];
       maxX = Math.max(maxX, px[u] + TABLE_WIDTH);
-      maxY = Math.max(maxY, py[u] + tableHeight(er.tables[u]));
+      globalMaxY = Math.max(globalMaxY, py[u] + tableHeight(er.tables[u]));
     });
-    // advance horizontal offset by this component's width + gap
-    const span = maxX + COL_SPACING * 0.8;
-    offsetX += span;
+    globalMaxX = Math.max(globalMaxX, offsetX + maxX);
+    offsetX += maxX + COL_SPACING * 0.8;
   });
+
+  // Tidy alignment for singleton tables below the main connected components
+  if (singletonComps.length > 0) {
+    let currentX = 0;
+    let currentY = connectedComps.length ? globalMaxY + SEP_GAP + 24 : 0;
+    let rowMaxHeight = 0;
+    const colSpacing = TABLE_WIDTH + SEP_GAP + 24;
+
+    singletonComps.forEach(comp => {
+      const u = comp[0];
+      const tHeight = tableHeight(er.tables[u]);
+      if (connectedComps.length && currentX + TABLE_WIDTH > globalMaxX) {
+        currentX = 0;
+        currentY += rowMaxHeight + SEP_GAP + 24;
+        rowMaxHeight = 0;
+      }
+      pos[u].x = currentX;
+      pos[u].y = currentY;
+      rowMaxHeight = Math.max(rowMaxHeight, tHeight);
+      currentX += colSpacing;
+    });
+  }
 
   // --- bounds ---
   let minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9;
@@ -1605,12 +1845,11 @@ function renderER(scopes, targetId, activeIdx){
 
   const svgW = maxX - minX + PAD*2;
   const svgH = maxY - minY + PAD*2;
-
-  function getPortCoordinates(i, col, faceRight){
+  function getPortCoordinates(i, col, faceRight, yOffset = 0){
     const t = er.tables[i];
     const ci = t.dispCols.indexOf(col);
     const x = faceRight ? pos[i].x + TABLE_WIDTH : pos[i].x;
-    const y = pos[i].y + headerHeight(t) + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2;
+    const y = pos[i].y + headerHeight(t) + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2 + yOffset;
     return { x, y };
   }
 
@@ -1624,17 +1863,40 @@ function renderER(scopes, targetId, activeIdx){
     </linearGradient>
   </defs>`;
 
+  // Pre-calculate port usage for fanning out overlapping lines
+  const portCounts = {};
+  const portIndices = {};
+  edges.forEach(ed => {
+    const l = ed.l;
+    const k1 = ed.a + "_" + (l.leftCol || "*");
+    const k2 = ed.b + "_" + (l.rightCol || "*");
+    portCounts[k1] = (portCounts[k1] || 0) + 1;
+    portCounts[k2] = (portCounts[k2] || 0) + 1;
+  });
+
   // --- join paths (drawn first, behind cards) ---
   edges.forEach(ed => {
     const l = ed.l;
     const color = JOIN_COLORS[(l.kind||"").toUpperCase()] || JOIN_DEFAULT_COLOR;
-    // face the nearer neighbor: target to the right => leave from right edge
     const aCx = pos[ed.a].x + TABLE_WIDTH/2;
     const bCx = pos[ed.b].x + TABLE_WIDTH/2;
     const aRight = bCx >= aCx;
     const bRight = aCx >= bCx;
-    const p1 = getPortCoordinates(ed.a, l.leftCol, aRight);
-    const p2 = getPortCoordinates(ed.b, l.rightCol, bRight);
+
+    const k1 = ed.a + "_" + (l.leftCol || "*");
+    const k2 = ed.b + "_" + (l.rightCol || "*");
+    const idx1 = portIndices[k1] || 0;
+    portIndices[k1] = idx1 + 1;
+    const idx2 = portIndices[k2] || 0;
+    portIndices[k2] = idx2 + 1;
+
+    const total1 = portCounts[k1];
+    const total2 = portCounts[k2];
+    const offset1 = total1 > 1 ? (idx1 - (total1 - 1) / 2) * 6 : 0;
+    const offset2 = total2 > 1 ? (idx2 - (total2 - 1) / 2) * 6 : 0;
+
+    const p1 = getPortCoordinates(ed.a, l.leftCol, aRight, offset1);
+    const p2 = getPortCoordinates(ed.b, l.rightCol, bRight, offset2);
     const mid = { x: (p1.x+p2.x)/2, y: (p1.y+p2.y)/2 };
 
     // invisible thick hit path + visible straight path + hover glow underlay
