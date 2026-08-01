@@ -64,7 +64,7 @@
   header button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   header button.primary:hover { background: #3b87e0; }
 
-  .main { flex: 1; display: flex; min-height: 0; }
+  .app-main { flex: 1; display: flex; min-height: 0; }
   .left {
     width: 40%;
     min-width: 320px;
@@ -202,12 +202,12 @@
     background-size: 24px 24px; background-position: 12px 12px;
     padding: 14px;
   }
-  #erFullscreenOverlay button {
+  #erFullscreenOverlay .er-fs-head button {
     background: var(--panel-2); color: var(--text);
     border: 1px solid var(--border); padding: 6px 12px;
     border-radius: 6px; cursor: pointer; font-size: 13px;
   }
-  #erFullscreenOverlay button:hover { border-color: var(--accent); color: var(--accent); }
+  #erFullscreenOverlay .er-fs-head button:hover { border-color: var(--accent); color: var(--accent); }
   .sql-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
   .label {
     font-size: 11px;
@@ -398,7 +398,7 @@
   <button id="clearBtn">Clear</button>
 </header>
 
-<div class="main">
+<div class="app-main">
   <div class="left">
     <div class="editors">
       <div class="sql-wrap">
@@ -436,7 +436,10 @@
 <div id="erFullscreenOverlay">
   <div class="er-fs-head">
     <div class="label">Table Relationships (from JOINs) — full screen</div>
-    <button id="erFullscreenExit">✕ Exit full screen (Esc)</button>
+    <span style="display:flex;align-items:center;gap:12px;">
+      <label class="er-toggle"><input type="checkbox" id="erAllColsFs"> Show all columns</label>
+      <button id="erFullscreenExit">✕ Exit full screen (Esc)</button>
+    </span>
   </div>
   <div id="erDiagramFs" class="er"></div>
 </div>
@@ -1511,6 +1514,15 @@ const JOIN_COLORS = {
 };
 const JOIN_DEFAULT_COLOR = "#94a3b8";
 
+// Orthogonal routing parameters: joins are routed around cards on the 24px
+// grid, with costs that penalize turns, hugging cards, and cells already used
+// by earlier joins (so parallel links fan out instead of overlapping).
+const ROUTE_CELL = GRID_SIZE;
+const TABLE_CLEARANCE = 16;      // path clearance around card edges
+const TURN_PENALTY = 3.5;        // extra cost per 90-degree elbow
+const EDGE_USE_PENALTY = 2.2;    // extra cost per cell used by a prior join
+const PROX_PENALTY = 0.35;       // extra cost for cells touching a card
+
 function snap(v){ return Math.round(v / GRID_SIZE) * GRID_SIZE; }
 
 // Word-wrap a table's display name to fit inside TABLE_WIDTH. Returns an array
@@ -1544,6 +1556,240 @@ function headerHeight(t){
   return HEADER_HEIGHT + (lines - 1) * NAME_LINE_H;
 }
 function tableHeight(t){ return headerHeight(t) + t.dispCols.length * ROW_HEIGHT; }
+
+// ---------- orthogonal join routing ----------
+// Builds padded obstacle rects around every card so routes stay clear.
+function buildObstacles(tables, pos){
+  return tables.map((t, i) => ({
+    x0: pos[i].x - TABLE_CLEARANCE,
+    y0: pos[i].y - TABLE_CLEARANCE,
+    x1: pos[i].x + TABLE_WIDTH + TABLE_CLEARANCE,
+    y1: pos[i].y + tableHeight(t) + TABLE_CLEARANCE
+  }));
+}
+
+function segIntersect(ax, ay, bx, by, cx, cy, dx, dy){
+  const rx = bx - ax, ry = by - ay, sx = dx - cx, sy = dy - cy;
+  const denom = rx * sy - ry * sx;
+  if (Math.abs(denom) < 1e-9) return null;
+  const t = ((cx - ax) * sy - (cy - ay) * sx) / denom;
+  const u = ((cx - ax) * ry - (cy - ay) * rx) / denom;
+  if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null;
+  return { x: ax + t * rx, y: ay + t * ry };
+}
+
+// Routes an orthogonal elbow path from port p1 to port p2 around table cards.
+// n1 / n2 are the outward normals (+1 = facing +x, -1 = facing -x) so the
+// path leaves each port perpendicular to its card edge. `usedMap` tracks cells
+// taken by already-routed joins so later links spread apart. Falls back to a
+// straight line if no route is found.
+function routeOrthogonal(p1, n1, p2, n2, obstacles, usedMap){
+  if (!obstacles || !obstacles.length) return [p1, p2];
+  const sPt = { x: p1.x + n1 * ROUTE_CELL, y: p1.y };
+  const tPt = { x: p2.x + n2 * ROUTE_CELL, y: p2.y };
+
+  let minX = Math.min(p1.x, p2.x), minY = Math.min(p1.y, p2.y);
+  let maxX = Math.max(p1.x, p2.x), maxY = Math.max(p1.y, p2.y);
+  obstacles.forEach(o => {
+    minX = Math.min(minX, o.x0); minY = Math.min(minY, o.y0);
+    maxX = Math.max(maxX, o.x1); maxY = Math.max(maxY, o.y1);
+  });
+  const pad = ROUTE_CELL * 2;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+
+  const gx0 = Math.floor(minX / ROUTE_CELL), gy0 = Math.floor(minY / ROUTE_CELL);
+  const W = Math.ceil((maxX - minX) / ROUTE_CELL) + 1;
+  const H = Math.ceil((maxY - minY) / ROUTE_CELL) + 1;
+  const N = W * H;
+  const idx = (cx, cy) => cy * W + cx;
+  const cxOf = i => i % W;
+  const cyOf = i => (i / W) | 0;
+
+  // blocked cells = any card rect (with clearance); prox counts blocked
+  // neighbours so the path floats off card edges instead of hugging them.
+  const blocked = new Uint8Array(N);
+  const prox = new Float64Array(N);
+  for (let cy = 0; cy < H; cy++){
+    const y0 = gy0 * ROUTE_CELL + cy * ROUTE_CELL;
+    const y1 = y0 + ROUTE_CELL;
+    for (let cx = 0; cx < W; cx++){
+      const x0 = gx0 * ROUTE_CELL + cx * ROUTE_CELL;
+      const x1 = x0 + ROUTE_CELL;
+      const i = idx(cx, cy);
+      for (let k = 0; k < obstacles.length; k++){
+        const o = obstacles[k];
+        if (x1 > o.x0 && x0 < o.x1 && y1 > o.y0 && y0 < o.y1){ blocked[i] = 1; break; }
+      }
+    }
+  }
+  for (let cy = 0; cy < H; cy++){
+    for (let cx = 0; cx < W; cx++){
+      const i = idx(cx, cy);
+      if (blocked[i]) continue;
+      let c = 0;
+      if (cx > 0 && blocked[i - 1]) c++;
+      if (cx < W - 1 && blocked[i + 1]) c++;
+      if (cy > 0 && blocked[i - W]) c++;
+      if (cy < H - 1 && blocked[i + W]) c++;
+      prox[i] = c;
+    }
+  }
+
+  function nearestFree(pt, maxR){
+    const cc = Math.floor(pt.x / ROUTE_CELL) - gx0;
+    const cr = Math.floor(pt.y / ROUTE_CELL) - gy0;
+    let best = -1, bestD = Infinity;
+    for (let r = 0; r <= maxR; r++){
+      for (let dy = -r; dy <= r; dy++){
+        for (let dx = -r; dx <= r; dx++){
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const cxx = cc + dx, cyy = cr + dy;
+          if (cxx < 0 || cxx >= W || cyy < 0 || cyy >= H) continue;
+          const i = idx(cxx, cyy);
+          if (blocked[i]) continue;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD){ bestD = d2; best = i; }
+        }
+      }
+    }
+    return best;
+  }
+
+  const start = nearestFree(sPt, 8);
+  const goal = nearestFree(tPt, 8);
+  if (start < 0 || goal < 0) return [p1, p2];
+
+  const INF = 1e12;
+  const g = new Float64Array(N).fill(INF);
+  const came = new Int32Array(N).fill(-1);
+  const closed = new Uint8Array(N);
+  const h = i => Math.abs(cxOf(i) - cxOf(goal)) + Math.abs(cyOf(i) - cyOf(goal));
+
+  const heap = [];
+  function heapPush(i, score){
+    const item = [i, score];
+    heap.push(item);
+    let k = heap.length - 1;
+    while (k > 0){
+      const p = (k - 1) >> 1;
+      if (heap[p][1] <= score) break;
+      heap[k] = heap[p];
+      k = p;
+    }
+    heap[k] = item;
+  }
+  function heapPop(){
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length && last !== top){
+      heap[0] = last;
+      let k = 0;
+      for (;;){
+        let best = k;
+        const l = k * 2 + 1, r = k * 2 + 2;
+        if (l < heap.length && heap[l][1] < heap[best][1]) best = l;
+        if (r < heap.length && heap[r][1] < heap[best][1]) best = r;
+        if (best === k) break;
+        const tmp = heap[k]; heap[k] = heap[best]; heap[best] = tmp;
+        k = best;
+      }
+    }
+    return top;
+  }
+
+  g[start] = 0;
+  heapPush(start, h(start));
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let found = -1;
+  let guard = 0;
+  while (heap.length && guard < N * 6){
+    guard++;
+    const cur = heapPop()[0];
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    if (cur === goal){ found = cur; break; }
+    const prev = came[cur];
+    const dirX = prev >= 0 ? cxOf(cur) - cxOf(prev) : 0;
+    const dirY = prev >= 0 ? cyOf(cur) - cyOf(prev) : 0;
+    for (let d = 0; d < 4; d++){
+      const nxc = cxOf(cur) + DIRS[d][0], nyc = cyOf(cur) + DIRS[d][1];
+      if (nxc < 0 || nxc >= W || nyc < 0 || nyc >= H) continue;
+      const ni = idx(nxc, nyc);
+      if (closed[ni] || blocked[ni]) continue;
+      let stepCost = 1 + prox[ni] * PROX_PENALTY;
+      if (prev >= 0 && (DIRS[d][0] !== dirX || DIRS[d][1] !== dirY)) stepCost += TURN_PENALTY;
+      stepCost += (usedMap.get(ni) || 0) * EDGE_USE_PENALTY;
+      const ng = g[cur] + stepCost;
+      if (ng < g[ni]){
+        g[ni] = ng;
+        came[ni] = cur;
+        heapPush(ni, ng + h(ni));
+      }
+    }
+  }
+  if (found < 0) return [p1, p2];
+
+  const cells = [];
+  let c = found;
+  while (c !== -1){ cells.push(c); c = came[c]; }
+  cells.reverse();
+  cells.forEach(cc2 => usedMap.set(cc2, (usedMap.get(cc2) || 0) + 1));
+
+  // grid centers -> pixel points with horizontal port stubs; drop collinear points
+  const pts = [{ x: p1.x, y: p1.y }, { x: sPt.x, y: sPt.y }];
+  for (const cc2 of cells){
+    pts.push({ x: (cxOf(cc2) + gx0) * ROUTE_CELL + ROUTE_CELL / 2,
+               y: (cyOf(cc2) + gy0) * ROUTE_CELL + ROUTE_CELL / 2 });
+  }
+  pts.push({ x: tPt.x, y: tPt.y }, { x: p2.x, y: p2.y });
+
+  // split the tiny diagonal joins between a port stub and a cell centre into
+  // axis-aligned L corners so the whole path stays orthogonal
+  const ortho = [pts[0]];
+  for (let i = 1; i < pts.length; i++){
+    const a = ortho[ortho.length - 1], b = pts[i];
+    if (a.x !== b.x && a.y !== b.y) ortho.push({ x: a.x, y: b.y });
+    ortho.push(b);
+  }
+
+  const dedup = [ortho[0]];
+  for (let i = 1; i < ortho.length; i++){
+    const a = dedup[dedup.length - 1], b = ortho[i];
+    if (Math.abs(a.x - b.x) > 0.01 || Math.abs(a.y - b.y) > 0.01) dedup.push(b);
+  }
+  const simple = [dedup[0]];
+  for (let i = 1; i < dedup.length - 1; i++){
+    const a = dedup[i - 1], b = dedup[i], c2 = dedup[i + 1];
+    const cross = (b.x - a.x) * (c2.y - b.y) - (c2.x - b.x) * (b.y - a.y);
+    if (Math.abs(cross) > 0.01) simple.push(b);
+  }
+  simple.push(dedup[dedup.length - 1]);
+  return simple;
+}
+
+// Convert an orthogonal polyline into an SVG path with rounded elbows.
+function orthoPathD(pts, r){
+  if (!pts || pts.length < 2) return "";
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length - 1; i++){
+    const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+    const inX = Math.sign(b.x - a.x), inY = Math.sign(b.y - a.y);
+    const outX = Math.sign(c.x - b.x), outY = Math.sign(c.y - b.y);
+    if (inX === outX && inY === outY){
+      d += ` L ${b.x} ${b.y}`;
+      continue;
+    }
+    const segIn = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    const segOut = Math.abs(c.x - b.x) + Math.abs(c.y - b.y);
+    const rr = Math.max(1, Math.min(r, segIn / 2, segOut / 2));
+    const ax = b.x - inX * rr, ay = b.y - inY * rr;
+    const cx2 = b.x + outX * rr, cy2 = b.y + outY * rr;
+    d += ` L ${ax} ${ay} Q ${b.x} ${b.y} ${cx2} ${cy2}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L ${last.x} ${last.y}`;
+  return d;
+}
 
 function renderER(scopes, targetId, activeIdx){
   const el = document.getElementById(targetId || "erDiagram");
@@ -1708,6 +1954,26 @@ function renderER(scopes, targetId, activeIdx){
           }
         });
       });
+      // edge-edge crossing reduction: push the endpoints of crossing joins
+      // away from the intersection so they untangle over the annealing loop
+      for (let e1i = 0; e1i < compEdges.length; e1i++){
+        for (let e2i = e1i + 1; e2i < compEdges.length; e2i++){
+          const e1 = compEdges[e1i], e2 = compEdges[e2i];
+          if (e1.a === e2.a || e1.a === e2.b || e1.b === e2.a || e1.b === e2.b) continue;
+          const X = segIntersect(px[e1.a], py[e1.a], px[e1.b], py[e1.b],
+                                 px[e2.a], py[e2.a], px[e2.b], py[e2.b]);
+          if (!X) continue;
+          const f = Math.min(2.2, k * 0.03);
+          [[e1.a, e1.b], [e2.a, e2.b]].forEach(pair => {
+            pair.forEach(nd => {
+              const dx = px[nd] - X.x, dy = py[nd] - X.y;
+              const dist = Math.hypot(dx, dy) || 0.01;
+              dispX[nd] += (dx / dist) * f;
+              dispY[nd] += (dy / dist) * f;
+            });
+          });
+        }
+      }
       // move
       nodes.forEach(u => {
         const d = Math.hypot(dispX[u], dispY[u]) || 0.01;
@@ -1727,7 +1993,7 @@ function renderER(scopes, targetId, activeIdx){
           const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
           const hu = tableHeight(er.tables[u]), hv = tableHeight(er.tables[v]);
           const ox = (wu + wv) / 2 + SEP_GAP - Math.abs(px[u] - px[v]);
-          const oy = (hu + hv) / 2 + SEP_GAP - Math.abs(py[u] - py[v]);
+          const oy = (hu + hv) / 2 + SEP_GAP - Math.abs((py[u] + hu/2) - (py[v] + hv/2));
           if (ox > 0 && oy > 0){
             worst = Math.max(worst, Math.min(ox, oy));
             if (ox < oy){
@@ -1811,7 +2077,7 @@ function renderER(scopes, targetId, activeIdx){
         const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
         const hu = tableHeight(er.tables[a]), hv = tableHeight(er.tables[b]);
         const ox = (wu + wv) / 2 + SEP_GAP + SNAP_SLACK - Math.abs(pos[a].x - pos[b].x);
-        const oy = (hu + hv) / 2 + SEP_GAP + SNAP_SLACK - Math.abs(pos[a].y - pos[b].y);
+        const oy = (hu + hv) / 2 + SEP_GAP + SNAP_SLACK - Math.abs((pos[a].y + hu/2) - (pos[b].y + hv/2));
         if (ox > 0 && oy > 0){
           worst = Math.max(worst, Math.min(ox, oy));
           if (ox < oy){
@@ -1843,8 +2109,6 @@ function renderER(scopes, targetId, activeIdx){
   er.tables.forEach((_,i)=>{ pos[i].x+=offX2; pos[i].y+=offY2; });
   minX+=offX2; minY+=offY2; maxX+=offX2; maxY+=offY2;
 
-  const svgW = maxX - minX + PAD*2;
-  const svgH = maxY - minY + PAD*2;
   function getPortCoordinates(i, col, faceRight, yOffset = 0){
     const t = er.tables[i];
     const ci = t.dispCols.indexOf(col);
@@ -1852,16 +2116,6 @@ function renderER(scopes, targetId, activeIdx){
     const y = pos[i].y + headerHeight(t) + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2 + yOffset;
     return { x, y };
   }
-
-  let svg = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">`;
-  svg += `<defs>
-    <filter id="erGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3" result="b"/><feMerge>
-      <feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <linearGradient id="erSubqGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#161224"/><stop offset="100%" stop-color="#0c0a14"/>
-    </linearGradient>
-  </defs>`;
 
   // Pre-calculate port usage for fanning out overlapping lines
   const portCounts = {};
@@ -1874,7 +2128,15 @@ function renderER(scopes, targetId, activeIdx){
     portCounts[k2] = (portCounts[k2] || 0) + 1;
   });
 
-  // --- join paths (drawn first, behind cards) ---
+  // obstacle rects for routing (every card, padded) + per-cell usage so
+  // parallel joins fan out along their whole length, not just at the port
+  const obstacles = buildObstacles(er.tables, pos);
+  const usedMap = new Map();
+  const darkKinds = new Set(["LEFT","RIGHT","FULL","CROSS"]);
+
+  // --- route every join before the canvas bounds are finalized ---
+  const joinMarkup = [];
+  let rMinX = minX, rMinY = minY, rMaxX = maxX, rMaxY = maxY;
   edges.forEach(ed => {
     const l = ed.l;
     const color = JOIN_COLORS[(l.kind||"").toUpperCase()] || JOIN_DEFAULT_COLOR;
@@ -1897,24 +2159,69 @@ function renderER(scopes, targetId, activeIdx){
 
     const p1 = getPortCoordinates(ed.a, l.leftCol, aRight, offset1);
     const p2 = getPortCoordinates(ed.b, l.rightCol, bRight, offset2);
-    const mid = { x: (p1.x+p2.x)/2, y: (p1.y+p2.y)/2 };
 
-    // invisible thick hit path + visible straight path + hover glow underlay
-    svg += `<g class="er-join" data-kind="${esc(l.kind||'')}" data-a="${esc(ed.a)}" data-b="${esc(ed.b)}" data-leftcol="${esc(l.leftCol||'')}" data-rightcol="${esc(l.rightCol||'')}">`;
-    svg += `<line class="er-hit" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="transparent" stroke-width="10"/>`;
-    svg += `<line class="er-glow" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="8" stroke-linecap="round" filter="url(#erGlow)"/>`;
-    svg += `<line class="er-line" x1="${p1.x}" y1="${p1.y}" x2="${p2.x}" y2="${p2.y}" stroke="${color}" stroke-width="2"/>`;
-    svg += `<circle class="er-port" cx="${p1.x}" cy="${p1.y}" r="4" fill="${color}"/>`;
-    svg += `<circle class="er-port" cx="${p2.x}" cy="${p2.y}" r="4" fill="${color}"/>`;
-    // midpoint badge
-    const darkKinds = new Set(["LEFT","RIGHT","FULL","CROSS"]);
+    // orthogonal route around the cards (straight-line fallback)
+    const pts = routeOrthogonal(p1, aRight ? 1 : -1, p2, bRight ? 1 : -1, obstacles, usedMap);
+    const d = orthoPathD(pts, 8);
+    pts.forEach(p => {
+      if (p.x < rMinX) rMinX = p.x;
+      if (p.x > rMaxX) rMaxX = p.x;
+      if (p.y < rMinY) rMinY = p.y;
+      if (p.y > rMaxY) rMaxY = p.y;
+    });
+
+    // midpoint of the routed path (for the badge)
+    let mid = p1;
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+    let acc = 0;
+    for (let i = 1; i < pts.length; i++){
+      const seg = Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y) || 1;
+      if (acc + seg >= total / 2){
+        const t = (total / 2 - acc) / seg;
+        mid = { x: pts[i-1].x + (pts[i].x - pts[i-1].x) * t,
+                y: pts[i-1].y + (pts[i].y - pts[i-1].y) * t };
+        break;
+      }
+      acc += seg;
+    }
+
+    // invisible thick hit path + visible routed path + hover glow underlay
+    joinMarkup.push(`<g class="er-join" data-kind="${esc(l.kind||'')}" data-a="${esc(ed.a)}" data-b="${esc(ed.b)}" data-leftcol="${esc(l.leftCol||'')}" data-rightcol="${esc(l.rightCol||'')}">`);
+    joinMarkup.push(`<path class="er-hit" d="${d}" stroke="transparent" stroke-width="10" fill="none"/>`);
+    joinMarkup.push(`<path class="er-glow" d="${d}" stroke="${color}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#erGlow)"/>`);
+    joinMarkup.push(`<path class="er-line" d="${d}" stroke="${color}" stroke-width="2" fill="none"/>`);
+    joinMarkup.push(`<circle class="er-port" cx="${p1.x}" cy="${p1.y}" r="4" fill="${color}"/>`);
+    joinMarkup.push(`<circle class="er-port" cx="${p2.x}" cy="${p2.y}" r="4" fill="${color}"/>`);
+    // midpoint badge (join kind)
     const txtCls = darkKinds.has((l.kind||"").toUpperCase()) ? "er-badge-txt dark" : "er-badge-txt";
-    svg += `<g class="er-badge" transform="translate(${mid.x},${mid.y})">
+    joinMarkup.push(`<g class="er-badge" transform="translate(${mid.x},${mid.y})">
       <rect x="-26" y="-11" width="52" height="22" rx="11" fill="${color}"/>
       <text x="0" y="4" text-anchor="middle" class="${txtCls}">${esc((l.kind||'LINK').toUpperCase())}</text>
-    </g>`;
-    svg += `</g>`;
+    </g>`);
+    joinMarkup.push(`</g>`);
   });
+
+  // include route extents in the canvas so nothing gets clipped
+  minX = Math.min(minX, rMinX - 30); minY = Math.min(minY, rMinY - 30);
+  maxX = Math.max(maxX, rMaxX + 30); maxY = Math.max(maxY, rMaxY + 30);
+
+  const vbX = minX - PAD, vbY = minY - PAD;
+  const svgW = maxX - minX + PAD*2;
+  const svgH = maxY - minY + PAD*2;
+
+  let svg = `<svg width="${svgW}" height="${svgH}" viewBox="${vbX} ${vbY} ${svgW} ${svgH}">`;
+  svg += `<defs>
+    <filter id="erGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge>
+      <feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="erSubqGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#161224"/><stop offset="100%" stop-color="#0c0a14"/>
+    </linearGradient>
+  </defs>`;
+
+  // joins behind cards, then tables
+  svg += joinMarkup.join("");
 
   // --- tables ---
   er.tables.forEach((t, i) => {
@@ -2081,6 +2388,13 @@ function renderERBoth(){
 // ---------- events ----------
 const erAllColsEl = document.getElementById("erAllCols");
 if (erAllColsEl) erAllColsEl.addEventListener("change", () => {
+  const fs = document.getElementById("erAllColsFs");
+  if (fs) fs.checked = erAllColsEl.checked;
+  renderERBoth();
+});
+const erAllColsFsEl = document.getElementById("erAllColsFs");
+if (erAllColsFsEl) erAllColsFsEl.addEventListener("change", () => {
+  if (erAllColsEl) erAllColsEl.checked = erAllColsFsEl.checked;
   renderERBoth();
 });
 
@@ -2088,6 +2402,9 @@ if (erAllColsEl) erAllColsEl.addEventListener("change", () => {
 function openERFullscreen(){
   if (!window.__erScopes) return;
   window.__erFullscreen = true;
+  const erAllColsFsEl = document.getElementById("erAllColsFs");
+  const erAllColsEl = document.getElementById("erAllCols");
+  if (erAllColsFsEl && erAllColsEl) erAllColsFsEl.checked = erAllColsEl.checked;
   renderERBoth();
   const ov = document.getElementById("erFullscreenOverlay");
   if (ov) ov.classList.add("open");
