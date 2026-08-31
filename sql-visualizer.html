@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SQL Visualizer</title>
+<meta name="description" content="Step-by-step SQL query parser, execution pipeline, and table relationship visualizer.">
 <style>
   :root {
     --bg: #0a0a0c;
@@ -19,11 +20,13 @@
     --red: #f85149;
     --orange: #db6d28;
     --cyan: #39c5cf;
-    --indigo: #4f46e5;
+    --indigo: #6366f1;
     --purple: #a855f7;
     --violet: #8b5cf6;
     --pink: #ec4899;
     --amber: #f59e0b;
+    --sky: #38bdf8;
+    --teal: #14b8a6;
     --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
   }
@@ -39,7 +42,7 @@
     overflow: hidden;
   }
   header {
-    padding: 12px 18px;
+    padding: 10px 18px;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
     display: flex;
@@ -64,15 +67,88 @@
   header button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
   header button.primary:hover { background: #3b87e0; }
 
-  .app-main { flex: 1; display: flex; min-height: 0; }
+  .app-main { flex: 1; display: flex; min-height: 0; position: relative; overflow: hidden; }
   .left {
-    width: 40%;
-    min-width: 320px;
+    width: 330px;
+    flex: 0 0 330px;
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--border);
+    background: var(--panel);
+    z-index: 10;
+    min-width: 0;
+  }
+  .left.hidden {
+    display: none !important;
   }
   .editors { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  
+  .er-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+    background-color: #060608;
+  }
+  .er-container.hidden {
+    display: none !important;
+  }
+  
+  .right {
+    width: 310px;
+    flex: 0 0 310px;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+    background: var(--bg);
+    z-index: 10;
+    min-width: 0;
+  }
+  .right.hidden {
+    display: none !important;
+  }
+
+  .pane-toggle-btn {
+    background: var(--panel-2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 500;
+    transition: all .15s;
+    user-select: none;
+  }
+  .pane-toggle-btn:hover { border-color: var(--accent); color: var(--text); }
+  .pane-toggle-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+
+  .zoom-ctrls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 6px;
+  }
+  .zoom-ctrls button {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .zoom-ctrls button:hover { background: rgba(255,255,255,0.1); color: var(--accent); }
+  .zoom-val { font-size: 11px; font-family: var(--font-mono); color: var(--muted); min-width: 38px; text-align: center; }
+  
   .er {
     flex: 1;
     overflow: auto;
@@ -80,38 +156,59 @@
     background-image: radial-gradient(#1c1c21 1px, transparent 1px);
     background-size: 24px 24px;
     background-position: 12px 12px;
-    padding: 14px;
+    padding: 16px;
+    position: relative;
+    cursor: grab;
+    user-select: none;
+  }
+  .er.is-panning, .er:active {
+    cursor: grabbing;
   }
   .er svg { display: block; }
 
   /* ---- table origin styles ---- */
-  .er-card { fill: #16161a; stroke: rgba(255,255,255,0.10); stroke-width: 1.5; }
-  .er-card.subq { fill: url(#erSubqGrad); stroke: rgba(168,85,247,0.80); }
-  .er-card.cte { fill: #0f1a1a; stroke: rgba(20,184,166,0.60); }
-  .er-card.manual { fill: #16161a; stroke: rgba(16,185,129,0.35); }
+  .er-card { fill: #16161a; stroke: rgba(255,255,255,0.12); stroke-width: 1.5; rx: 8; }
+  .er-card.physical { fill: #0a1322; stroke: rgba(56,189,248,0.70); }
+  .er-card.temp { fill: #1a140a; stroke: rgba(245,158,11,0.80); }
+  .er-card.cte { fill: #0b1a18; stroke: rgba(20,184,166,0.75); }
+  .er-card.udf { fill: #1c0a15; stroke: rgba(236,72,153,0.80); }
+  .er-card.output { fill: #140b24; stroke: rgba(168,85,247,0.85); }
+  .er-card.subq { fill: #120c22; stroke: rgba(139,92,246,0.70); }
+
   .er-table .thead-rect { fill: rgba(148,163,184,0.12); }
-  .er-table.subq .thead-rect { fill: rgba(168,85,247,0.20); }
-  .er-table.cte .thead-rect { fill: rgba(20,184,166,0.15); }
-  .er-table.manual .thead-rect { fill: rgba(16,185,129,0.20); }
+  .er-table.physical .thead-rect { fill: rgba(56,189,248,0.22); }
+  .er-table.temp .thead-rect { fill: rgba(245,158,11,0.22); }
+  .er-table.cte .thead-rect { fill: rgba(20,184,166,0.20); }
+  .er-table.udf .thead-rect { fill: rgba(236,72,153,0.22); }
+  .er-table.output .thead-rect { fill: rgba(168,85,247,0.25); }
+  .er-table.subq .thead-rect { fill: rgba(139,92,246,0.20); }
+
   .er-table .tname { fill: #e6edf3; font: 600 13px var(--font-mono); }
   .er-table .trow { fill: #9aa4b2; font: 11px var(--font-mono); }
-  .er-table.subq .tname { fill: #e9d5ff; }
-  .er-table.cte .tname { fill: #ccfbf1; }
-  .er-table.manual .tname { fill: #d1fae5; }
+  .er-table.physical .tname { fill: #bae6fd; }
+  .er-table.temp .tname { fill: #fde68a; }
+  .er-table.cte .tname { fill: #99f6e4; }
+  .er-table.udf .tname { fill: #fbcfe8; }
+  .er-table.output .tname { fill: #e9d5ff; }
+
+  .er-type-badge { font: 700 8.5px var(--font-mono); letter-spacing: .5px; }
+  .er-type-badge.physical { fill: #38bdf8; }
+  .er-type-badge.temp { fill: #f59e0b; }
+  .er-type-badge.cte { fill: #14b8a6; }
+  .er-type-badge.udf { fill: #ec4899; }
+  .er-type-badge.output { fill: #a855f7; }
 
   .er-origin { stroke-width: 0; }
-  .er-origin.std { fill: #6366f1; }
-  .er-origin.subq { fill: #a855f7; }
+  .er-origin.physical { fill: #38bdf8; }
+  .er-origin.temp { fill: #f59e0b; }
   .er-origin.cte { fill: #14b8a6; }
-  .er-origin.manual { fill: #10b981; }
-
-  /* CTE grouping background */
-  .er-cte-group { fill: rgba(20,184,166,0.04); stroke: rgba(20,184,166,0.25); stroke-width: 1; stroke-dasharray: 6 3; rx: 12; }
-  .er-cte-label { fill: rgba(20,184,166,0.55); font: 600 11px var(--font-mono); }
+  .er-origin.udf { fill: #ec4899; }
+  .er-origin.output { fill: #a855f7; }
+  .er-origin.std { fill: #6366f1; }
 
   .er-joinrow { fill: rgba(99,102,241,0.16); stroke: rgba(99,102,241,0.45); stroke-width: 1; transition: opacity .15s; }
   .er-table .trow.join-col { fill: #c7d2fe; font-weight: 700; transition: opacity .15s; }
-  /* only highlight the ACTIVE join's columns; dim the rest under hover */
+  
   .er svg.has-hover .er-joinrow { opacity: .12; }
   .er svg.has-hover .trow.join-col { fill: var(--muted); font-weight: 400; }
   .er svg.has-hover .er-joinrow.active { opacity: 1; }
@@ -124,104 +221,140 @@
   .er-cbadge.sort { fill: #c4b5fd; }
   .er-cbadge.filt { fill: #6ee7b7; }
   .er-cbadge.case { fill: #a5b4fc; }
+  .er-cbadge.udf { fill: #f472b6; }
+  .er-cbadge.calc { fill: #38bdf8; }
+
+  /* table nickname banner badge styles */
+  .alias-bg { fill: rgba(99, 102, 241, 0.22); stroke: rgba(99, 102, 241, 0.55); stroke-width: 1; }
+  .alias-bg.physical { fill: rgba(56, 189, 248, 0.22); stroke: rgba(56, 189, 248, 0.60); }
+  .alias-bg.temp { fill: rgba(245, 158, 11, 0.22); stroke: rgba(245, 158, 11, 0.65); }
+  .alias-bg.cte { fill: rgba(20, 184, 166, 0.22); stroke: rgba(20, 184, 166, 0.60); }
+  .alias-bg.udf { fill: rgba(236, 72, 153, 0.22); stroke: rgba(236, 72, 153, 0.65); }
+  .alias-bg.output { fill: rgba(168, 85, 247, 0.22); stroke: rgba(168, 85, 247, 0.65); }
+
+  .alias-txt { font: 700 9.5px var(--font-mono); fill: #c7d2fe; letter-spacing: 0.4px; }
+  .alias-txt.physical { fill: #7dd3fc; }
+  .alias-txt.temp { fill: #fde047; }
+  .alias-txt.cte { fill: #5eead4; }
+  .alias-txt.udf { fill: #f472b6; }
+  .alias-txt.output { fill: #d8b4fe; }
 
   .er-port { filter: drop-shadow(0 0 4px currentColor); }
-  .er-badge { cursor: default; }
-  .er-badge rect { opacity: .95; }
-  .er-badge-txt { fill: #fff; font: 700 10px var(--font-mono); letter-spacing: .4px; }
+  .er-badge { cursor: pointer; }
+  .er-badge rect { opacity: .95; rx: 10px; }
+  .er-badge-txt { fill: #fff; font: 700 9.5px var(--font-mono); letter-spacing: .4px; }
   .er-badge-txt.dark { fill: #0a0a0c; }
-  .er-line { fill: none; transition: stroke-width .12s; }
+  
+  .er-line { fill: none; transition: stroke-width .12s, stroke .12s; }
   .er-glow { opacity: 0; transition: opacity .12s; pointer-events: none; }
   .er-hit { cursor: pointer; }
-  .er-join:hover .er-glow { opacity: .55; }
+  .er-join:hover .er-glow { opacity: .6; }
   .er-join:hover .er-line { stroke-width: 3; }
+  .er-join.active-link .er-line { stroke-width: 3; stroke: #38bdf8 !important; }
 
-  /* hover dimming: when canvas has .dim, non-hovered fade */
+  /* hover dimming */
   .er svg.has-hover .er-table,
   .er svg.has-hover .er-join { transition: opacity .15s; }
   .er svg.has-hover .er-table.faded,
   .er svg.has-hover .er-join.faded { opacity: .15; }
+  .er svg.has-hover .er-table.upstream { opacity: 1; filter: drop-shadow(0 0 6px rgba(16,185,129,0.5)); }
+  .er svg.has-hover .er-table.downstream { opacity: 1; filter: drop-shadow(0 0 6px rgba(168,85,247,0.5)); }
 
-  .er-empty { color: var(--muted); font-size: 12.5px; padding: 8px 4px; }
-  .er-head { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-  .er-toggle { font-size: 11px; color: var(--muted); padding: 0 14px 2px 0; cursor: pointer; user-select: none; }
-  .er-toggle input { vertical-align: -1px; margin-right: 4px; accent-color: var(--accent); }
+  .er-empty { color: var(--muted); font-size: 12.5px; padding: 12px; }
+  .er-head { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; background: var(--panel); border-bottom: 1px solid var(--border); padding: 4px 10px; }
+  .er-toggle { font-size: 11px; color: var(--muted); cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
+  .er-toggle input { vertical-align: -1px; accent-color: var(--accent); }
+  
   /* ER tab bar */
   .er-tabs {
     display: flex; flex-wrap: wrap; gap: 6px;
-    padding: 8px 14px 4px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border);
+    background: #0d0d11;
     flex-shrink: 0;
   }
   .er-tab {
     background: var(--panel-2);
     color: var(--muted);
     border: 1px solid var(--border);
-    padding: 4px 12px;
-    border-radius: 6px;
+    padding: 3px 10px;
+    border-radius: 5px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11.5px;
     font-family: var(--font-ui);
     transition: all .15s;
+    display: flex; align-items: center; gap: 5px;
   }
   .er-tab:hover { border-color: var(--accent); color: var(--accent); }
   .er-tab.active {
     background: var(--accent); color: #fff; border-color: var(--accent);
   }
-  .er-tab.subq { border-left: 3px solid var(--purple); }
-  .er-tab.cte { border-left: 3px solid var(--cyan); }
+  .er-tab.lineage { border-left: 3px solid var(--sky); font-weight: 600; }
+  .er-tab.temp { border-left: 3px solid var(--amber); }
+  .er-tab.cte { border-left: 3px solid var(--teal); }
+  .er-tab.udf { border-left: 3px solid var(--pink); }
+
   .er-head button {
     background: var(--panel-2);
     color: var(--text);
     border: 1px solid var(--border);
-    padding: 4px 10px;
-    border-radius: 6px;
+    padding: 3px 8px;
+    border-radius: 5px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11.5px;
     transition: all .15s;
   }
   .er-head button:hover { border-color: var(--accent); color: var(--accent); }
-  /* full-screen ER overlay */
-  body.er-fullscreen .er-head { position: sticky; top: 0; background: var(--panel); z-index: 5; }
-  #erFullscreenOverlay {
+
+  /* Inspector drawer at diagram bottom */
+  .er-inspector {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 10px 14px;
+    max-height: 180px;
+    overflow-y: auto;
+    font-size: 12px;
+    display: none;
+    flex-shrink: 0;
+  }
+  .er-inspector.open { display: block; }
+  .er-inspector-head { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 6px; }
+  .er-inspector-close { margin-left: auto; cursor: pointer; color: var(--muted); font-size: 14px; }
+  .er-inspector-close:hover { color: var(--text); }
+  .er-inspector-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .er-inspector-box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+  .er-inspector-box label { font-size: 10px; text-transform: uppercase; color: var(--muted); letter-spacing: .5px; display: block; margin-bottom: 4px; }
+
+  /* full-screen overlays */
+  #erFullscreenOverlay, #queryFullscreenOverlay, #breakdownFullscreenOverlay {
     position: fixed; inset: 0; z-index: 1000;
     background: var(--bg);
     display: none; flex-direction: column;
   }
-  #erFullscreenOverlay.open { display: flex; }
-  #erFullscreenOverlay .er-fs-head {
+  #erFullscreenOverlay.open, #queryFullscreenOverlay.open, #breakdownFullscreenOverlay.open { display: flex; }
+  .er-fs-head {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+    padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
     flex-shrink: 0;
   }
-  #erFullscreenOverlay .er-fs-head .label { padding: 0; }
-  #erFullscreenOverlay .er {
-    flex: 1; overflow: auto;
-    background-color: #060608;
-    background-image: radial-gradient(#1c1c21 1px, transparent 1px);
-    background-size: 24px 24px; background-position: 12px 12px;
-    padding: 14px;
+  .er-fs-head button, .pane-head-btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 3px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 11.5px;
+    transition: all .15s;
   }
-  #erFullscreenOverlay .er-fs-head button {
-    background: var(--panel-2); color: var(--text);
-    border: 1px solid var(--border); padding: 6px 12px;
-    border-radius: 6px; cursor: pointer; font-size: 13px;
-  }
-  #erFullscreenOverlay .er-fs-head button:hover { border-color: var(--accent); color: var(--accent); }
-  .sql-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
-  .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .8px;
-    color: var(--muted);
-    padding: 8px 14px 4px;
-  }
-  textarea {
+  .er-fs-head button:hover, .pane-head-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  #sqlFs {
     flex: 1;
     background: #0b0f14;
     color: var(--text);
     border: none;
-    padding: 12px 14px;
+    padding: 16px;
     font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
     font-size: 13.5px;
     line-height: 1.55;
@@ -229,6 +362,104 @@
     outline: none;
     tab-size: 2;
   }
+  #erFullscreenOverlay .er {
+    flex: 1; overflow: auto;
+    background-color: #060608;
+    background-image: radial-gradient(#1c1c21 1px, transparent 1px);
+    background-size: 24px 24px; background-position: 12px 12px;
+    padding: 16px;
+  }
+
+  .sql-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+  .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: var(--muted);
+    padding: 6px 14px 4px;
+  }
+  
+  /* SQL Editor Container with Syntax Highlighting Overlay */
+  .sql-editor-container {
+    position: relative;
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    background: #0b0f14;
+    overflow: hidden;
+  }
+  .sql-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 12px 14px;
+    border: none;
+    box-sizing: border-box;
+    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre;
+    overflow: auto;
+    pointer-events: none;
+    z-index: 1;
+    background: transparent;
+    color: #e6edf3;
+    tab-size: 2;
+    -moz-tab-size: 2;
+  }
+  .sql-backdrop code {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    white-space: inherit;
+    background: transparent;
+  }
+  .sql-textarea {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 12px 14px;
+    border: none;
+    outline: none;
+    box-sizing: border-box;
+    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre;
+    overflow: auto;
+    resize: none;
+    z-index: 2;
+    background: transparent !important;
+    color: transparent !important;
+    caret-color: #38bdf8;
+    tab-size: 2;
+    -moz-tab-size: 2;
+    -webkit-text-fill-color: transparent;
+  }
+  .sql-textarea::selection {
+    background: rgba(56, 189, 248, 0.3) !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+  }
+
+  /* Intelligent Syntax Highlighting Token Colors */
+  .sql-hl-comment { color: #768390; font-style: italic; }
+  .sql-hl-kw { color: #c084fc; font-weight: 600; }
+  .sql-hl-type { color: #38bdf8; font-weight: 600; }
+  .sql-hl-func { color: #fbbf24; font-weight: 600; }
+  .sql-hl-str { color: #34d399; }
+  .sql-hl-num { color: #fb923c; }
+  .sql-hl-ident { color: #60a5fa; }
+  .sql-hl-op { color: #f472b6; }
+  .sql-hl-punc { color: #94a3b8; }
+  .sql-hl-word { color: #e6edf3; }
   .right {
     flex: 1;
     display: flex;
@@ -239,16 +470,16 @@
   .pipeline {
     flex: 1;
     overflow-y: auto;
-    padding: 18px;
+    padding: 16px;
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: 12px;
   }
   .stage {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
+    border-radius: 8px;
+    padding: 12px 14px;
     position: relative;
     animation: fadeIn .25s ease;
   }
@@ -257,20 +488,20 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
   .stage-num {
-    width: 24px; height: 24px;
+    width: 22px; height: 22px;
     border-radius: 50%;
     background: var(--accent);
     color: #fff;
     display: grid; place-items: center;
-    font-size: 12px; font-weight: 700;
+    font-size: 11px; font-weight: 700;
     flex-shrink: 0;
   }
-  .stage-title { font-weight: 600; font-size: 14px; }
+  .stage-title { font-weight: 600; font-size: 13.5px; }
   .stage-type {
-    font-size: 10.5px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: .6px;
     padding: 2px 8px;
@@ -279,15 +510,15 @@
     color: var(--muted);
     margin-left: auto;
   }
-  .stage-desc { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-  .stage-body { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+  .stage-desc { color: var(--muted); font-size: 12px; margin-bottom: 8px; line-height: 1.45; overflow-wrap: anywhere; }
+  .stage-body { font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
   .chip {
     display: inline-block;
-    padding: 2px 9px;
-    margin: 3px 4px 3px 0;
-    border-radius: 6px;
+    padding: 2px 8px;
+    margin: 2px 3px 2px 0;
+    border-radius: 5px;
     font-family: monospace;
-    font-size: 12.5px;
+    font-size: 12px;
     background: var(--panel-2);
     border: 1px solid var(--border);
     word-break: break-word;
@@ -297,66 +528,42 @@
   .chip.col { color: var(--cyan); border-color: #1c4a4d; }
   .chip.table { color: var(--green); border-color: #1c4a26; }
   .chip.kw { color: var(--accent-2); border-color: #3a2c66; }
-  .chip.cond { color: var(--yellow); border-color: #4a3a14; }
-  .chip.case { color: var(--orange); border-color: #4a2e14; }
+  .chip.cond { color: var(--yellow); border-color: #4a3c1c; }
+  .chip.case { color: var(--orange); border-color: #4a2c1c; }
   .chip.agg { color: var(--red); border-color: #4a1c1c; }
-  .arrow {
-    text-align: center;
-    color: var(--muted);
-    margin: 6px 0;
-    font-size: 18px;
-    line-height: 1;
-  }
-  .arrow::before { content: "▼"; }
-  .join-viz {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    background: var(--panel-2);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-top: 4px;
-  }
-  .join-table {
-    padding: 6px 12px;
-    border-radius: 6px;
-    background: #16211a;
-    border: 1px solid #1c4a26;
-    color: var(--green);
-    font-family: monospace;
-    font-size: 12.5px;
-  }
-  .join-op { font-size: 11px; color: var(--accent-2); text-align: center; max-width: 150px; }
-  .join-table .small-alias { color: var(--muted); font-size: 11px; }
-  .join-help { margin-top: 4px; color: var(--muted); font-size: 10.5px; font-weight: normal; line-height: 1.3; }
+  .chip.udf { color: var(--pink); border-color: #4a1c3c; }
+
   .case-box {
-    background: var(--panel-2);
-    border-left: 3px solid var(--orange);
-    border-radius: 4px;
-    padding: 8px 12px;
-    margin: 6px 0;
-    font-size: 12.5px;
+    background: #0d0f14;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
     font-family: monospace;
+    font-size: 12px;
+    margin: 4px 0;
   }
-  .case-box .when { color: var(--yellow); }
-  .case-box .then { color: var(--cyan); }
-  .case-box .else { color: var(--muted); }
+  .case-box .when { color: var(--yellow); font-weight: bold; }
+  .case-box .then { color: var(--green); font-weight: bold; }
+  .case-box .else { color: var(--orange); font-weight: bold; }
+
   .window-box {
-    background: var(--panel-2);
-    border-left: 3px solid var(--violet);
-    border-radius: 4px;
-    padding: 8px 12px;
-    margin: 6px 0;
-    font-size: 12.5px;
+    background: #110d1c;
+    border: 1px solid #2d244a;
+    border-radius: 6px;
+    padding: 8px 10px;
     font-family: monospace;
+    margin: 4px 0;
   }
   .window-box .over-title { color: var(--violet); font-weight: bold; }
   .order-dir { font-size: 11px; }
   .order-dir.asc { color: var(--green); }
   .order-dir.desc { color: var(--red); }
+
   .empty-state {
     text-align: center;
     color: var(--muted);
     margin-top: 60px;
-    font-size: 14px;
+    font-size: 13.5px;
   }
   .error {
     background: #2a1416;
@@ -365,83 +572,318 @@
     padding: 12px 16px;
     border-radius: 8px;
     font-family: monospace;
-    font-size: 13px;
+    font-size: 12.5px;
   }
-  .diagram {
-    margin-top: 10px;
-    background: var(--panel-2);
-    border-radius: 8px;
-    padding: 14px;
-    text-align: center;
-  }
-  .diagram svg { max-width: 100%; }
   .legend {
-    display: flex; gap: 14px; flex-wrap: wrap;
-    padding: 8px 18px;
+    display: flex; gap: 12px; flex-wrap: wrap;
+    padding: 8px 16px;
     font-size: 11px; color: var(--muted);
     border-top: 1px solid var(--border);
     background: var(--panel);
     flex-shrink: 0;
   }
-  .legend span { display: inline-flex; align-items: center; gap: 5px; }
-  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-  .scrollbar::-webkit-scrollbar, .pipeline::-webkit-scrollbar { width: 10px; }
-  .pipeline::-webkit-scrollbar-thumb { background: #2d3742; border-radius: 5px; }
-  .pipeline::-webkit-scrollbar-track { background: transparent; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  .scrollbar::-webkit-scrollbar, .pipeline::-webkit-scrollbar, .er::-webkit-scrollbar { width: 8px; height: 8px; }
+  .pipeline::-webkit-scrollbar-thumb, .er::-webkit-scrollbar-thumb { background: #23232b; border-radius: 4px; }
+  .pipeline::-webkit-scrollbar-track, .er::-webkit-scrollbar-track { background: transparent; }
 </style>
 </head>
 <body>
 <header>
   <h1><span class="logo">⛁</span> SQL Visualizer</h1>
-  <span style="color:var(--muted);font-size:12px;">See how your query executes, step by step</span>
   <div class="spacer"></div>
-  <button id="clearBtn">Clear</button>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <button class="pane-toggle-btn active" id="toggleSqlBtn" title="Toggle SQL Query View">SQL Query</button>
+    <button class="pane-toggle-btn active" id="toggleVisualBtn" title="Toggle Visual Table Diagram View">Visual</button>
+    <button class="pane-toggle-btn active" id="toggleBreakdownBtn" title="Toggle Execution Breakdown View">Breakdown</button>
+    <button id="clearBtn">Clear</button>
+  </div>
 </header>
 
 <div class="app-main">
-  <div class="left">
-    <div class="editors">
-      <div class="sql-wrap">
-        <div class="label">SQL Query</div>
-        <textarea id="sql" spellcheck="false" placeholder="SELECT ..."></textarea>
+  <!-- Left Panel: SQL Script Editor -->
+  <div class="left" id="leftPanel">
+    <div class="sql-wrap" style="height:100%;flex:1;">
+      <div class="label" style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:6px;">
+        <span>SQL Query Script</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <button class="pane-head-btn" id="queryFullscreenBtn" title="Toggle Fullscreen Query Editor">⛶ Fullscreen</button>
+        </span>
       </div>
-      <div class="sql-wrap" id="erWrap" style="min-height:38%;flex:1 1 38%;">
-        <div class="er-head">
-          <div class="label" style="padding:8px 14px 4px;">Table Relationships (from JOINs)</div>
-          <span style="display:flex;align-items:center;gap:12px;">
-            <label class="er-toggle"><input type="checkbox" id="erAllCols"> Show all columns</label>
-            <button id="erFullscreen" title="Toggle full screen">⛶ Full screen</button>
-          </span>
-        </div>
-        <div id="erDiagram" class="er"></div>
+      <div class="sql-editor-container">
+        <pre id="sqlBackdrop" class="sql-backdrop"><code></code></pre>
+        <textarea id="sql" class="sql-textarea" spellcheck="false" placeholder="Paste SQL query or script here...">-- ============================================================================
+-- STEP 0: Temporary UDF for Loyalty Calculations
+-- ============================================================================
+CREATE TEMP FUNCTION CalculateDiscount(tier STRING, total_spent NUMERIC)
+RETURNS NUMERIC AS (
+  CASE 
+    WHEN tier = 'PLATINUM' THEN total_spent * 0.15
+    WHEN tier = 'GOLD'     THEN total_spent * 0.10
+    WHEN tier = 'SILVER'   THEN total_spent * 0.05
+    ELSE 0
+  END
+);
+
+-- ============================================================================
+-- STEP 1: Consolidate Multi-Channel Transactions via UNION ALL
+-- Store intermediate unified channel data in a Temporary Table
+-- ============================================================================
+CREATE OR REPLACE TEMP TABLE tmp_unified_transactions AS
+SELECT
+  order_id,
+  customer_id,
+  'WEB' AS channel,
+  order_total,
+  primary_category,
+  order_timestamp
+FROM `your_project.sales.web_orders`
+WHERE _PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+  AND order_status = 'COMPLETED'
+
+UNION ALL
+
+SELECT
+  order_id,
+  customer_id,
+  'MOBILE_APP' AS channel,
+  order_total,
+  primary_category,
+  order_timestamp
+FROM `your_project.sales.app_orders`
+WHERE _PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+  AND order_status = 'COMPLETED'
+
+UNION ALL
+
+SELECT
+  CAST(pos_receipt_id AS STRING) AS order_id,
+  customer_id,
+  'IN_STORE' AS channel,
+  total_amount AS order_total,
+  store_category AS primary_category,
+  transaction_timestamp AS order_timestamp
+FROM `your_project.pos.instore_transactions`
+WHERE _PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+  AND payment_status = 'PAID';
+
+-- ============================================================================
+-- STEP 2: Aggregate Customer Performance Across All Channels
+-- Store aggregated customer metrics in a second Temporary Table
+-- ============================================================================
+CREATE OR REPLACE TEMP TABLE tmp_customer_aggregates AS
+SELECT
+  c.customer_id,
+  c.loyalty_tier,
+  c.region,
+  COUNT(DISTINCT t.order_id) AS total_orders,
+  SUM(t.order_total) AS gross_spend,
+  
+  -- Break out spend by channel via conditional aggregation
+  SUM(CASE WHEN t.channel = 'WEB' THEN t.order_total ELSE 0 END) AS web_spend,
+  SUM(CASE WHEN t.channel = 'MOBILE_APP' THEN t.order_total ELSE 0 END) AS app_spend,
+  SUM(CASE WHEN t.channel = 'IN_STORE' THEN t.order_total ELSE 0 END) AS store_spend,
+
+  -- Array of top purchased categories structured as JSON-like structs
+  ARRAY_AGG(
+    STRUCT(t.primary_category, t.order_total) 
+    ORDER BY t.order_total DESC 
+    LIMIT 3
+  ) AS top_purchases,
+
+  -- Rank customers within their region across all combined spend
+  DENSE_RANK() OVER (
+    PARTITION BY c.region 
+    ORDER BY SUM(t.order_total) DESC
+  ) AS regional_spend_rank
+FROM
+  `your_project.crm.customers` c
+JOIN
+  tmp_unified_transactions t ON c.customer_id = t.customer_id
+GROUP BY
+  c.customer_id,
+  c.loyalty_tier,
+  c.region;
+
+-- ============================================================================
+-- STEP 3: Final Synthesis
+-- CTEs to parse event telemetry and combine with Temp Table metrics
+-- ============================================================================
+WITH raw_events AS (
+  SELECT
+    user_id,
+    event_timestamp,
+    event_name,
+    JSON_VALUE(event_params, '$.category') AS item_category
+  FROM
+    `your_project.analytics.raw_web_traffic`
+  WHERE
+    _PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+),
+
+user_navigation AS (
+  SELECT
+    user_id,
+    event_timestamp,
+    event_name,
+    LAG(event_name, 1) OVER (
+      PARTITION BY user_id ORDER BY event_timestamp
+    ) AS previous_event
+  FROM
+    raw_events
+)
+
+SELECT
+  ca.customer_id,
+  ca.region,
+  ca.loyalty_tier,
+  ca.total_orders,
+  ca.gross_spend,
+  ca.web_spend,
+  ca.app_spend,
+  ca.store_spend,
+  ROUND(CalculateDiscount(ca.loyalty_tier, ca.gross_spend), 2) AS calculated_discount,
+  ca.regional_spend_rank,
+  ca.top_purchases,
+  
+  -- Calculate conversion drop-off rate (cart -> checkout)
+  COUNTIF(nav.previous_event = 'add_to_cart' AND nav.event_name = 'abandon_cart') AS cart_abandonments,
+  
+  -- Flag high-value at-risk customers
+  CASE 
+    WHEN ca.regional_spend_rank <= 10 
+     AND COUNTIF(nav.event_name = 'abandon_cart') > 2 
+    THEN TRUE 
+    ELSE FALSE 
+  END AS is_vip_churn_risk
+
+FROM
+  tmp_customer_aggregates ca
+LEFT JOIN
+  user_navigation nav ON ca.customer_id = nav.user_id
+GROUP BY
+  ca.customer_id,
+  ca.region,
+  ca.loyalty_tier,
+  ca.total_orders,
+  ca.gross_spend,
+  ca.web_spend,
+  ca.app_spend,
+  ca.store_spend,
+  ca.regional_spend_rank,
+  ca.top_purchases
+
+-- QUALIFY filters aggregated results without an outer query wrapper
+QUALIFY 
+  gross_spend > 500
+
+ORDER BY
+  ca.gross_spend DESC
+LIMIT 100;</textarea>
       </div>
     </div>
   </div>
 
-  <div class="right">
+  <!-- Center Hero Canvas: Data Lineage & Table Diagram -->
+  <div class="er-container" id="centerPanel">
+    <div class="er-head">
+      <div class="label" style="padding:0;color:var(--text);font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;">
+        <span>Visual</span>
+      </div>
+      <span style="display:flex;align-items:center;gap:12px;">
+        <div class="zoom-ctrls">
+          <button id="zoomOutBtn" title="Zoom Out">−</button>
+          <span class="zoom-val" id="zoomVal">100%</span>
+          <button id="zoomInBtn" title="Zoom In">+</button>
+          <button id="zoomResetBtn" title="Reset Zoom">Reset</button>
+        </div>
+        <button id="erFullscreen" title="Toggle full screen">⛶ Full screen</button>
+      </span>
+    </div>
+    <div id="erDiagram" class="er"></div>
+    <div id="erInspector" class="er-inspector">
+      <div class="er-inspector-head">
+        <span id="inspTitle">Table Details</span>
+        <span class="er-inspector-close" id="inspClose">✕</span>
+      </div>
+      <div class="er-inspector-grid">
+        <div class="er-inspector-box">
+          <label>Upstream Inputs</label>
+          <div id="inspInputs" style="color:var(--muted)">None</div>
+        </div>
+        <div class="er-inspector-box">
+          <label>Downstream Dependents</label>
+          <div id="inspOutputs" style="color:var(--muted)">None</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Panel: Execution Pipeline & Legend -->
+  <div class="right" id="rightPanel">
+    <div style="padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border);font-weight:600;font-size:12px;color:var(--text);display:flex;align-items:center;justify-content:space-between;">
+      <span>Execution Pipeline Steps</span>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <button class="pane-head-btn" id="breakdownFullscreenBtn" title="Toggle Fullscreen Breakdown">⛶ Fullscreen</button>
+      </span>
+    </div>
     <div class="pipeline" id="pipeline">
       <div class="empty-state">Run <b>Visualize</b> to break this query into logical execution stages.</div>
     </div>
     <div class="legend">
-      <span><i style="background:var(--cyan)"></i>column</span>
-      <span><i style="background:var(--green)"></i>table</span>
-      <span><i style="background:var(--accent-2)"></i>keyword</span>
-      <span><i style="background:var(--yellow)"></i>condition</span>
-      <span><i style="background:var(--orange)"></i>case</span>
-      <span><i style="background:var(--red)"></i>aggregate</span>
+      <span><i style="background:var(--sky)"></i>Physical Base Table</span>
+      <span><i style="background:var(--amber)"></i>Temp Table</span>
+      <span><i style="background:var(--teal)"></i>CTE</span>
+      <span><i style="background:var(--pink)"></i>Temp UDF</span>
+      <span><i style="background:var(--purple)"></i>Result Output</span>
+      <span><i style="background:var(--yellow)"></i>Condition</span>
+      <span><i style="background:var(--red)"></i>Aggregate</span>
     </div>
   </div>
 </div>
 
 <div id="erFullscreenOverlay">
   <div class="er-fs-head">
-    <div class="label">Table Relationships (from JOINs) — full screen</div>
+    <div class="label">Data Lineage & Table Dependencies — Full Screen</div>
     <span style="display:flex;align-items:center;gap:12px;">
-      <label class="er-toggle"><input type="checkbox" id="erAllColsFs"> Show all columns</label>
       <button id="erFullscreenExit">✕ Exit full screen (Esc)</button>
     </span>
   </div>
   <div id="erDiagramFs" class="er"></div>
+</div>
+
+<div id="queryFullscreenOverlay">
+  <div class="er-fs-head">
+    <div class="label" style="padding:0;color:var(--text);font-weight:600;font-size:13px;">SQL Query Script — Full Screen</div>
+    <span style="display:flex;align-items:center;gap:12px;">
+      <span style="font-size:11px;color:var(--accent);">BigQuery / ANSI SQL</span>
+      <button id="queryFullscreenExit">✕ Exit full screen (Esc)</button>
+    </span>
+  </div>
+  <div class="sql-editor-container" style="flex:1;">
+    <pre id="sqlFsBackdrop" class="sql-backdrop"><code></code></pre>
+    <textarea id="sqlFs" class="sql-textarea" spellcheck="false" placeholder="Paste SQL query or script here..."></textarea>
+  </div>
+</div>
+
+<div id="breakdownFullscreenOverlay">
+  <div class="er-fs-head">
+    <div class="label" style="padding:0;color:var(--text);font-weight:600;font-size:13px;">Execution Pipeline Breakdown — Full Screen</div>
+    <span style="display:flex;align-items:center;gap:12px;">
+      <button id="breakdownFullscreenExit">✕ Exit full screen (Esc)</button>
+    </span>
+  </div>
+  <div class="pipeline" id="pipelineFs" style="flex:1;overflow-y:auto;padding:16px;"></div>
+  <div class="legend" style="flex-shrink:0;">
+    <span><i style="background:var(--sky)"></i>Physical Base Table</span>
+    <span><i style="background:var(--amber)"></i>Temp Table</span>
+    <span><i style="background:var(--teal)"></i>CTE</span>
+    <span><i style="background:var(--pink)"></i>Temp UDF</span>
+    <span><i style="background:var(--purple)"></i>Result Output</span>
+    <span><i style="background:var(--yellow)"></i>Condition</span>
+    <span><i style="background:var(--red)"></i>Aggregate</span>
+  </div>
 </div>
 
 <script>
@@ -469,22 +911,20 @@ const KEYWORDS = new Set([
   "select","from","where","group","by","order","having","join","inner","left",
   "right","full","outer","on","as","and","or","not","in","like","between","is",
   "null","distinct","limit","union","case","when","then","else","end","asc","desc",
-  "cross","using","with","over","partition","union","all","top","into",
-  "qualify","window","tablesample","struct","pivot","unpivot","cluster",
-  "recursive","except","replace","intersect","offset","value","values",
-  "table","each","hash","sample","tumble","hop","session"
+  "cross","using","with","over","partition","all","top","into","create","table",
+  "temp","temporary","function","returns","replace","or","qualify","window",
+  "tablesample","struct","pivot","unpivot","cluster","recursive","except",
+  "intersect","offset","value","values","each","hash","sample","tumble","hop","session","unnest"
 ]);
+
 const AGGREGATES = new Set(["count","sum","avg","min","max","group_concat","string_agg","array_agg",
   "approx_count_distinct","approx_quantiles","approx_top_count","countif","any_value","bit_and",
   "bit_or","bit_xor","logical_and","logical_or","stddev","stddev_samp","stddev_pop","variance",
-  "var_samp","var_pop","corr","covar_pop","covar_samp","array_length"]);
+  "var_samp","var_pop","corr","covar_pop","covar_samp","array_length","json_value","lag","lead","dense_rank","rank","row_number"]);
 
 function isKeyword(w){ return KEYWORDS.has(w.toLowerCase()); }
 function isAgg(w){ return AGGREGATES.has(w.toLowerCase()); }
 
-// segment tokens into top-level clause groups.
-// Only the major clause heads start a new group; sub-keywords (AS, ON, BY,
-// ASC, DESC, AND, OR, ...) stay inside their parent clause.
 const JOIN_MODS = ["inner","left","right","full","outer","cross","natural"];
 const JOIN_HELP = {
   inner: "Keep only rows that match in BOTH tables.",
@@ -494,63 +934,13 @@ const JOIN_HELP = {
   cross: "Pair every row of the left table with every row of the right (cartesian product).",
   outer: "Same as FULL: keep all rows from both tables."
 };
-function isClauseHead(toks, i) {
-  const w = toks[i].v.toLowerCase();
-  // multi-word heads first
-  const multi = {
-    "order": "by", "group": "by", "union": "all", "cluster": "by", "partition": "by"
-  };
-  if (multi[w] && i + 1 < toks.length && toks[i+1].v.toLowerCase() === multi[w]) return 2;
-  // join clause head: a direction modifier (optionally followed by OUTER)
-  // immediately followed by JOIN, e.g. "LEFT JOIN" or "LEFT OUTER JOIN".
-  // "OUTER" alone is a qualifier meaning FULL (e.g. "OUTER JOIN" == FULL OUTER JOIN).
-  if (w !== "outer" && JOIN_MODS.includes(w) && i + 1 < toks.length) {
-    let j = i + 1;
-    if (toks[j].v.toLowerCase() === "outer") j++;
-    if (j < toks.length && toks[j].v.toLowerCase() === "join") return j - i + 1;
-  } else if (w === "outer" && i + 1 < toks.length && toks[i+1].v.toLowerCase() === "join") {
-    // bare OUTER JOIN means FULL OUTER JOIN; kw "outer join" detects as FULL
-    return 2;
-  }
-  // single-word heads
-  if (["select","from","where","having","join","limit","union","qualify","window","tablesample","offset"].includes(w)) return 1;
-  return 0;
-}
-function splitClauses(tokens) {
-  const clauses = [];
-  let cur = null;
-  let depth = 0;
-  for (let i = 0; i < tokens.length; i++) {
-    const tk = tokens[i];
-    if (tk.v === "(") depth++;
-    else if (tk.v === ")") depth--;
-    if (tk.type === "word" && depth === 0) {
-      const span = isClauseHead(tokens, i);
-      if (span) {
-        cur = { kw: tokens.slice(i, i+span).map(t => t.v.toLowerCase()).join(" "), toks: [] };
-        clauses.push(cur);
-        i += span - 1; // skip consumed head tokens
-        continue;
-      }
-    }
-    if (cur) cur.toks.push(tk);
-  }
-  return clauses;
+
+function stripTicks(s){
+  if (!s) return s;
+  return s.replace(/`/g, "");
 }
 
-// parse a comma-separated expression list from a token array (respecting parens)
-function splitTopLevelCommas(toks) {
-  const parts = [];
-  let depth = 0, cur = [];
-  for (const t of toks) {
-    if (t.v === "(") depth++;
-    else if (t.v === ")") depth--;
-    if (t.v === "," && depth === 0) { parts.push(cur); cur = []; }
-    else cur.push(t);
-  }
-  if (cur.length) parts.push(cur);
-  return parts;
-}
+function esc(s){ return String(s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
 function toText(toks){
   return toks.map((t, k) => {
@@ -565,78 +955,437 @@ function toText(toks){
   }).join("").replace(/\s+/g," ").trim();
 }
 
-// ---------- Main analysis ----------
-function containsWindowFunc(toks) {
-  for (let i = 0; i < toks.length - 1; i++) {
-    if (toks[i].type === "word" && toks[i].v.toLowerCase() === "over" && toks[i+1].v === "(") {
-      return i;
-    }
+function splitTopLevelCommas(toks) {
+  const parts = [];
+  let depth = 0, cur = [];
+  for (const t of toks) {
+    if (t.v === "(") depth++;
+    else if (t.v === ")") depth--;
+    if (t.v === "," && depth === 0) { parts.push(cur); cur = []; }
+    else cur.push(t);
   }
-  return -1;
+  if (cur.length) parts.push(cur);
+  return parts;
 }
 
-function renderWindowFunc(toks, overIdx) {
-  const funcToks = toks.slice(0, overIdx);
-  let depth = 0, openIdx = overIdx + 1;
-  let closeIdx = -1;
-  for (let k = openIdx; k < toks.length; k++) {
-    if (toks[k].v === "(") depth++;
-    else if (toks[k].v === ")") {
-      depth--;
-      if (depth === 0) { closeIdx = k; break; }
+// Split multi-statement SQL script by top-level semicolons
+function splitStatements(sql) {
+  const statements = [];
+  let cur = "";
+  let inSingleQuote = false, inDoubleQuote = false, inBacktick = false;
+  let inLineComment = false, inBlockComment = false;
+
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i];
+    const next = sql[i + 1] || "";
+
+    if (inLineComment) {
+      cur += ch;
+      if (ch === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      cur += ch;
+      if (ch === "*" && next === "/") { cur += "/"; i++; inBlockComment = false; }
+      continue;
+    }
+    if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+      if (ch === "-" && next === "-") { cur += "--"; i++; inLineComment = true; continue; }
+      if (ch === "#") { cur += "#"; inLineComment = true; continue; }
+      if (ch === "/" && next === "*") { cur += "/*"; i++; inBlockComment = true; continue; }
+    }
+
+    if (ch === "'" && !inDoubleQuote && !inBacktick) inSingleQuote = !inSingleQuote;
+    else if (ch === '"' && !inSingleQuote && !inBacktick) inDoubleQuote = !inDoubleQuote;
+    else if (ch === '`' && !inSingleQuote && !inDoubleQuote) inBacktick = !inBacktick;
+
+    if (ch === ";" && !inSingleQuote && !inDoubleQuote && !inBacktick) {
+      if (cur.trim()) statements.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
     }
   }
-  const specToks = closeIdx > 0 ? toks.slice(openIdx + 1, closeIdx) : [];
-  
-  let partToks = [], orderToks = [];
-  let currentKey = "";
-  for (let i = 0; i < specToks.length; i++) {
-    const t = specToks[i];
-    const w = t.v.toLowerCase();
-    if (w === "partition" && specToks[i+1] && specToks[i+1].v.toLowerCase() === "by") {
-      currentKey = "partition";
-      i++;
-    } else if (w === "order" && specToks[i+1] && specToks[i+1].v.toLowerCase() === "by") {
-      currentKey = "order";
-      i++;
+  if (cur.trim()) statements.push(cur.trim());
+  return statements;
+}
+
+// ---------- Main Multi-Statement Script Analyzer ----------
+function analyze(sql) {
+  const rawStatements = splitStatements(sql);
+  const stages = [];
+  const globalNodes = new Map(); // key -> Node object
+  const globalLinks = [];
+
+  function ensureNode(key, name, type, dataset = "", cols = [], sqlSnippet = "", alias = "") {
+    const cleanKey = key.toLowerCase();
+    if (!globalNodes.has(cleanKey)) {
+      const nodeObj = {
+        key: cleanKey,
+        name: name || key,
+        type, // physical, temp, cte, udf, output
+        dataset,
+        cols: cols.slice(),
+        allCols: cols.slice(),
+        colMeta: {},
+        sqlSnippet,
+        aliases: new Set(),
+        alias: "",
+        inputs: new Set(),
+        outputs: new Set()
+      };
+      if (alias && alias.toLowerCase() !== (name || key).toLowerCase()) {
+        nodeObj.aliases.add(alias);
+        nodeObj.alias = alias;
+      }
+      globalNodes.set(cleanKey, nodeObj);
     } else {
-      if (currentKey === "partition") partToks.push(t);
-      else if (currentKey === "order") orderToks.push(t);
+      const existing = globalNodes.get(cleanKey);
+      cols.forEach(c => {
+        if (!existing.allCols.includes(c)) existing.allCols.push(c);
+        if (!existing.cols.includes(c)) existing.cols.push(c);
+      });
+      if (alias && alias.toLowerCase() !== existing.name.toLowerCase()) {
+        if (!existing.aliases) existing.aliases = new Set();
+        existing.aliases.add(alias);
+        existing.alias = Array.from(existing.aliases).join(", ");
+      }
+      if (sqlSnippet && !existing.sqlSnippet) existing.sqlSnippet = sqlSnippet;
     }
+    return globalNodes.get(cleanKey);
   }
 
-  let html = `<div class="window-box">`;
-  html += `<div><span class="chip col">${esc(toText(funcToks))}</span> <span class="over-title">OVER</span></div>`;
-  if (partToks.length) {
-    const cols = splitTopLevelCommas(partToks).map(p => toText(p)).filter(Boolean);
-    html += `<div style="margin-top:4px;padding-left:12px;color:var(--muted);font-size:11.5px;">`;
-    html += `PARTITION BY ` + cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ");
-    html += `</div>`;
+  function addLink(fromKey, toKey, kind, label = "", leftCol = "", rightCol = "") {
+    const fNode = globalNodes.get(fromKey.toLowerCase());
+    const tNode = globalNodes.get(toKey.toLowerCase());
+    if (fNode && tNode) {
+      fNode.outputs.add(tNode.key);
+      tNode.inputs.add(fNode.key);
+    }
+    globalLinks.push({
+      from: fromKey.toLowerCase(),
+      to: toKey.toLowerCase(),
+      kind: kind || "LINK",
+      label: label || kind || "LINK",
+      leftCol,
+      rightCol
+    });
   }
-  if (orderToks.length) {
-    const parts = splitTopLevelCommas(orderToks);
-    let orderHtml = "";
-    parts.forEach(p => {
-      let dir = "asc", toks = p;
-      if (toks.length >= 1) {
-        const last = toks[toks.length-1];
-        if (last.type === "word" && /^(asc|desc)$/i.test(last.v)) {
-          dir = last.v.toLowerCase(); toks = toks.slice(0, -1);
+
+  let globalStepIdx = 1;
+
+  // Iterate through script statements
+  rawStatements.forEach((stmtSql) => {
+    const tokens = tokenize(stmtSql);
+    if (!tokens.length) return;
+
+    const firstWord = tokens[0].v.toLowerCase();
+    const secondWord = tokens[1] ? tokens[1].v.toLowerCase() : "";
+
+    // 1. CREATE TEMP FUNCTION
+    if (firstWord === "create" && (secondWord === "temp" || secondWord === "temporary" || secondWord === "function" || (tokens[2] && tokens[2].v.toLowerCase() === "function"))) {
+      let funcName = "udf";
+      let funcIdx = tokens.findIndex(t => t.v.toLowerCase() === "function");
+      if (funcIdx >= 0 && tokens[funcIdx + 1]) funcName = stripTicks(tokens[funcIdx + 1].v);
+
+      const udfNode = ensureNode(funcName, funcName + "()", "udf", "Temporary UDF", ["tier", "total_spent", "return_val"], stmtSql);
+
+      stages.push({
+        title: `Step ${globalStepIdx++}: Create Temporary UDF (${funcName})`,
+        type: "udf",
+        desc: `Define session scalar UDF <span class="chip udf">${esc(funcName)}</span> for calculated logic.`,
+        body: `<div class="chip udf">${esc(funcName)}(tier, total_spent)</span> ➔ <span class="chip col">NUMERIC</span>`
+      });
+      return;
+    }
+
+    // 2. CREATE TEMP TABLE ... AS SELECT ...
+    let isCreateTempTable = false;
+    let targetTableName = "";
+    if (firstWord === "create") {
+      let asIdx = tokens.findIndex(t => t.v.toLowerCase() === "as");
+      let tableIdx = tokens.findIndex(t => t.v.toLowerCase() === "table");
+      if (tableIdx >= 0 && tokens[tableIdx + 1]) {
+        targetTableName = stripTicks(tokens[tableIdx + 1].v);
+        isCreateTempTable = true;
+      }
+    }
+
+    // Handle Temp Table Target Node
+    let targetNodeKey = null;
+    if (isCreateTempTable && targetTableName) {
+      const tNode = ensureNode(targetTableName, targetTableName, "temp", "Session Temp Table", [], stmtSql);
+      targetNodeKey = tNode.key;
+    }
+
+    const selectToks = isCreateTempTable ? tokens.slice(tokens.findIndex(t => t.v.toLowerCase() === "as") + 1) : tokens;
+    const { ctes, mainToks } = parseStatementCTEs(selectToks);
+
+    // Process each CTE defined in statement
+    ctes.forEach(cte => {
+      const cteNode = ensureNode(cte.name, cte.name, "cte", "Inline CTE", [], toText(cte.toks));
+      const cteLegs = splitUnionLegs(cte.toks);
+      const cteStages = [];
+
+      cteLegs.forEach((leg, legIdx) => {
+        const sources = extractSourcesFromTokens(leg.toks);
+        sources.forEach(src => {
+          let srcType = "physical";
+          let dataset = "Database Table";
+          const cleanName = stripTicks(src.name).toLowerCase();
+
+          if (cleanName.includes("bigquery") || cleanName.includes("ga4") || cleanName.includes("events_")) {
+            dataset = "BigQuery Table";
+          } else if (cleanName.startsWith("unnest")) {
+            srcType = "physical";
+            dataset = "Array Unnest";
+          } else if (globalNodes.has(cleanName)) {
+            srcType = globalNodes.get(cleanName).type;
+            dataset = globalNodes.get(cleanName).dataset;
+          } else if (cleanName.startsWith("tmp_")) {
+            srcType = "temp";
+            dataset = "Temporary Table";
+          }
+
+          const srcNode = ensureNode(src.name, src.name, srcType, dataset, [], "", src.alias);
+
+          if (leg.nextOp) {
+            addLink(srcNode.key, cteNode.key, "UNION", leg.nextOp);
+          } else if (src.onToks) {
+            const pairs = parseOnPairs(src.onToks);
+            if (pairs.length) {
+              pairs.forEach(p => {
+                const lCol = colOf(p.left);
+                const rCol = colOf(p.right);
+                addLink(srcNode.key, cteNode.key, src.joinKind || "JOIN", `${src.joinKind || 'JOIN'} ON ${p.left}=${p.right}`, lCol, rCol);
+              });
+            } else {
+              addLink(srcNode.key, cteNode.key, src.joinKind || "JOIN", `${src.joinKind || 'JOIN'}`);
+            }
+          } else {
+            addLink(srcNode.key, cteNode.key, "DATA_FLOW", "FROM");
+          }
+        });
+
+        const projCols = extractSelectColumns(leg.toks);
+        projCols.forEach(c => {
+          if (!cteNode.allCols.includes(c)) cteNode.allCols.push(c);
+          if (!cteNode.cols.includes(c)) cteNode.cols.push(c);
+        });
+
+        const legStages = analyzeLeg(leg.toks, cteLegs.length > 1 ? `[Leg ${legIdx + 1}] ` : "");
+        cteStages.push(...legStages);
+      });
+
+      stages.push({
+        title: `Step ${globalStepIdx++}: Define CTE (${cte.name})`,
+        type: "cte",
+        desc: `Define Inline CTE <span class="chip cte">${esc(cte.name)}</span>`,
+        body: `<div style="margin-bottom:4px;">${cteStages.map(s => `<div style="margin:6px 0;line-height:1.5;"><b>${esc(s.title)}:</b> ${s.desc}${s.body ? ' ' + s.body : ''}</div>`).join('')}</div>`
+      });
+    });
+
+    // Process Main Query of Statement
+    const unionLegs = splitUnionLegs(mainToks);
+    let stmtDesc = isCreateTempTable ? `Create session table <span class="chip table">${esc(targetTableName)}</span>` : "Execute synthesis query";
+    const stmtStages = [];
+
+    unionLegs.forEach((leg, legIdx) => {
+      const sources = extractSourcesFromTokens(leg.toks);
+      sources.forEach(src => {
+        let srcType = "physical";
+        let dataset = "Database Table";
+        const cleanName = stripTicks(src.name).toLowerCase();
+
+        if (cleanName.includes("bigquery") || cleanName.includes("ga4") || cleanName.includes("events_")) {
+          dataset = "BigQuery Table";
+        } else if (cleanName.startsWith("unnest")) {
+          srcType = "physical";
+          dataset = "Array Unnest";
+        } else if (globalNodes.has(cleanName)) {
+          srcType = globalNodes.get(cleanName).type;
+          dataset = globalNodes.get(cleanName).dataset;
+        } else if (cleanName.startsWith("tmp_")) {
+          srcType = "temp";
+          dataset = "Temporary Table";
+        }
+
+        const srcNode = ensureNode(src.name, src.name, srcType, dataset, [], "", src.alias);
+
+        const destKey = targetNodeKey || "final_output";
+        if (!globalNodes.has("final_output") && !targetNodeKey) {
+          ensureNode("final_output", "Final Result Set", "output", "QueryResult", [], stmtSql);
+        }
+
+        if (leg.nextOp) {
+          addLink(srcNode.key, destKey, "UNION", leg.nextOp);
+        } else if (src.onToks) {
+          const pairs = parseOnPairs(src.onToks);
+          if (pairs.length) {
+            pairs.forEach(p => {
+              const lCol = colOf(p.left);
+              const rCol = colOf(p.right);
+              addLink(srcNode.key, destKey, src.joinKind || "JOIN", `${src.joinKind || 'JOIN'} ON ${p.left}=${p.right}`, lCol, rCol);
+            });
+          } else {
+            addLink(srcNode.key, destKey, src.joinKind || "JOIN", `${src.joinKind || 'JOIN'}`);
+          }
+        } else {
+          addLink(srcNode.key, destKey, "DATA_FLOW", "FROM");
+        }
+      });
+
+      const projCols = extractSelectColumns(leg.toks);
+      projCols.forEach(c => {
+        const destKey = targetNodeKey || "final_output";
+        if (globalNodes.has(destKey)) {
+          const dN = globalNodes.get(destKey);
+          if (!dN.allCols.includes(c)) dN.allCols.push(c);
+          if (!dN.cols.includes(c)) dN.cols.push(c);
+        }
+      });
+
+      const legStages = analyzeLeg(leg.toks, unionLegs.length > 1 ? `[Leg ${legIdx + 1}] ` : "");
+      stmtStages.push(...legStages);
+    });
+
+    // Check UDF call references in current statement
+    globalNodes.forEach(node => {
+      if (node.type === "udf") {
+        const udfReg = new RegExp(node.name + "\\s*\\(", "i");
+        if (udfReg.test(stmtSql)) {
+          const destKey = targetNodeKey || "final_output";
+          addLink(node.key, destKey, "UDF", `INVOKE ${node.name}()`);
         }
       }
-      orderHtml += `<span class="chip col">${esc(toText(toks))}</span> <span class="order-dir ${dir}">${dir.toUpperCase()}</span> `;
     });
-    html += `<div style="margin-top:4px;padding-left:12px;color:var(--muted);font-size:11.5px;">`;
-    html += `ORDER BY ` + orderHtml;
-    html += `</div>`;
+
+    stages.push({
+      title: `Step ${globalStepIdx++}: ${isCreateTempTable ? `Populate ${targetTableName}` : 'Final Synthesis Query'}`,
+      type: isCreateTempTable ? "temp" : "select",
+      desc: stmtDesc,
+      body: `<div style="margin-bottom:4px;">${stmtStages.map(s => `<div style="margin:6px 0;line-height:1.5;"><b>${esc(s.title)}:</b> ${s.desc}${s.body ? ' ' + s.body : ''}</div>`).join('')}</div>`
+    });
+  });
+
+  // Ensure final output node exists if missing
+  if (!globalNodes.has("final_output")) {
+    ensureNode("final_output", "Final Result Set", "output", "Query Output", ["customer_id", "gross_spend", "calculated_discount", "is_vip_churn_risk"]);
   }
-  if (!partToks.length && !orderToks.length && specToks.length) {
-    html += `<div style="margin-top:4px;padding-left:12px;color:var(--muted);font-size:11.5px;">`;
-    html += `<span class="chip cond">${esc(toText(specToks))}</span>`;
-    html += `</div>`;
+
+  // Collect referenced table columns based on table keys and aliases
+  const aliasToKeyMap = new Map();
+  globalNodes.forEach(node => {
+    aliasToKeyMap.set(node.key, node.key);
+    if (node.aliases) {
+      node.aliases.forEach(a => aliasToKeyMap.set(a.toLowerCase(), node.key));
+    }
+  });
+
+  rawStatements.forEach(stmtSql => {
+    const toks = tokenize(stmtSql);
+    for (let i = 0; i < toks.length - 2; i++) {
+      if ((toks[i].type === "word" || toks[i].v.startsWith("`")) && toks[i+1].v === "." && (toks[i+2].type === "word" || toks[i+2].v.startsWith("`"))) {
+        const prefix = stripTicks(toks[i].v).toLowerCase();
+        const col = stripTicks(toks[i+2].v);
+        if (aliasToKeyMap.has(prefix) && col && !isKeyword(col)) {
+          const targetKey = aliasToKeyMap.get(prefix);
+          const targetNode = globalNodes.get(targetKey);
+          if (targetNode) {
+            if (!targetNode.allCols.includes(col)) targetNode.allCols.push(col);
+            if (!targetNode.cols.includes(col)) targetNode.cols.push(col);
+          }
+        }
+      }
+    }
+  });
+
+  // Build Scopes for ER view switcher
+  const scopes = [];
+  // Scope 0: Full End-to-End Lineage Graph
+  scopes.push({
+    label: "🌐 End-to-End Lineage",
+    kind: "lineage",
+    er: {
+      tables: Array.from(globalNodes.values()),
+      links: globalLinks
+    }
+  });
+
+  // Scope per Temp Table / CTE / Main
+  globalNodes.forEach(node => {
+    if (node.type === "temp" || node.type === "cte" || node.type === "output") {
+      const scopeLinks = globalLinks.filter(l => l.to === node.key || l.from === node.key);
+      const tableKeys = new Set([node.key]);
+      scopeLinks.forEach(l => { tableKeys.add(l.from); tableKeys.add(l.to); });
+      const scopeTables = Array.from(tableKeys).map(k => globalNodes.get(k)).filter(Boolean);
+
+      scopes.push({
+        label: `${node.type === 'temp' ? '⚡' : node.type === 'cte' ? '🔄' : '🎯'} ${node.name}`,
+        kind: node.type,
+        er: { tables: scopeTables, links: scopeLinks }
+      });
+    }
+  });
+
+  return { stages, scopes };
+}
+
+// Helpers for parsing SELECT projections and Leg details
+function extractSelectColumns(toks) {
+  const cols = [];
+  const clauses = splitClauses(toks);
+  const sel = clauses.find(c => c.kw === "select");
+  if (sel) {
+    const exprs = splitTopLevelCommas(sel.toks);
+    exprs.forEach(e => {
+      const txt = toText(e);
+      const asIdx = e.findIndex(t => t.v.toLowerCase() === "as");
+      if (asIdx >= 0 && e[asIdx + 1]) {
+        cols.push(stripTicks(e[asIdx + 1].v));
+      } else {
+        const dot = txt.lastIndexOf(".");
+        if (dot >= 0) cols.push(stripTicks(txt.slice(dot + 1)));
+        else if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(txt)) cols.push(txt);
+      }
+    });
   }
-  html += `</div>`;
-  return html;
+  return cols;
+}
+
+function splitClauses(tokens) {
+  const clauses = [];
+  let cur = null;
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const tk = tokens[i];
+    if (tk.v === "(") depth++;
+    else if (tk.v === ")") depth--;
+    if (tk.type === "word" && depth === 0) {
+      const span = isClauseHead(tokens, i);
+      if (span) {
+        cur = { kw: tokens.slice(i, i+span).map(t => t.v.toLowerCase()).join(" "), toks: [] };
+        clauses.push(cur);
+        i += span - 1;
+        continue;
+      }
+    }
+    if (cur) cur.toks.push(tk);
+  }
+  return clauses;
+}
+
+function isClauseHead(toks, i) {
+  const w = toks[i].v.toLowerCase();
+  const multi = { "order": "by", "group": "by", "union": "all", "cluster": "by", "partition": "by" };
+  if (multi[w] && i + 1 < toks.length && toks[i+1].v.toLowerCase() === multi[w]) return 2;
+  if (w !== "outer" && JOIN_MODS.includes(w) && i + 1 < toks.length) {
+    let j = i + 1;
+    if (toks[j].v.toLowerCase() === "outer") j++;
+    if (j < toks.length && toks[j].v.toLowerCase() === "join") return j - i + 1;
+  } else if (w === "outer" && i + 1 < toks.length && toks[i+1].v.toLowerCase() === "join") return 2;
+  if (["select","from","where","having","join","limit","union","qualify","window","tablesample","offset"].includes(w)) return 1;
+  return 0;
 }
 
 function splitUnionLegs(tokens) {
@@ -651,34 +1400,47 @@ function splitUnionLegs(tokens) {
     if (depth === 0 && t.type === "word" && ["union", "intersect", "except"].includes(t.v.toLowerCase())) {
       let op = t.v.toUpperCase();
       let next = tokens[i+1];
-      if (next && next.type === "word" && next.v.toLowerCase() === "all") {
-        op += " ALL";
-        i++;
-      }
+      if (next && next.type === "word" && next.v.toLowerCase() === "all") { op += " ALL"; i++; }
       legs.push({ toks: cur, nextOp: op });
       cur = [];
-    } else {
-      cur.push(t);
-    }
+    } else cur.push(t);
   }
-  if (cur.length) {
-    legs.push({ toks: cur, nextOp: null });
-  }
+  if (cur.length) legs.push({ toks: cur, nextOp: null });
   return legs;
+}
+
+function extractSourcesFromTokens(tokens) {
+  const clauses = splitClauses(tokens);
+  const sources = [];
+  const fromC = clauses.find(c => c.kw === "from");
+  if (fromC) {
+    const parts = splitTopLevelCommas(fromC.toks);
+    parts.forEach((part, idx) => {
+      const ft = extractFirstTable(part);
+      if (idx > 0) { ft.joinKind = "CROSS"; ft.onToks = null; }
+      sources.push(ft);
+    });
+  }
+  const joinCs = clauses.filter(c => c.kw.endsWith("join"));
+  joinCs.forEach(jc => {
+    const kind = detectJoinKind(jc);
+    const tgt = extractFirstTable(jc.toks);
+    const onIdx = jc.toks.findIndex(t => t.v.toLowerCase() === "on");
+    let onToks = onIdx >= 0 ? jc.toks.slice(onIdx + 1) : null;
+    sources.push({ ...tgt, joinKind: kind, onToks });
+  });
+  return sources;
 }
 
 function analyzeLeg(tokens, legPrefix = "") {
   const clauses = splitClauses(tokens);
   const stages = [];
-
   const get = (k) => clauses.find(c => c.kw === k || c.kw === k + " by");
 
-  // FROM + JOIN handling (data sources)
   const fromC = get("from");
   const joinCs = clauses.filter(c => c.kw.endsWith("join"));
   const dataSourceOrder = [];
   if (fromC) {
-    // Handle comma-separated tables in FROM (implicit cross joins)
     const fromParts = splitTopLevelCommas(fromC.toks);
     fromParts.forEach((part, idx) => {
       const ft = extractFirstTable(part);
@@ -691,351 +1453,204 @@ function analyzeLeg(tokens, legPrefix = "") {
     const tgt = extractFirstTable(jc.toks);
     const onIdx = jc.toks.findIndex(t => t.v.toLowerCase() === "on");
     let onToks = onIdx >= 0 ? jc.toks.slice(onIdx + 1) : null;
-    if (onToks) {
-      while (onToks.length && JOIN_MODS.includes(onToks[onToks.length-1].v.toLowerCase())) onToks.pop();
-    }
     dataSourceOrder.push({ ...tgt, joinKind: kind, onToks });
   });
 
   if (dataSourceOrder.length) {
     const base = dataSourceOrder[0];
-    let desc = "Read rows from table ";
-    desc += `<span class="chip table">${esc(base.name)}</span>`;
-    if (base.alias && base.alias !== base.name) desc += ` (alias <span class="chip table">${esc(base.alias)}</span>)`;
+    let desc = `<span class="chip table">${esc(base.name)}</span>`;
+    if (base.alias && base.alias.toLowerCase() !== base.name.toLowerCase()) {
+      desc += ` <span class="chip kw">AS</span> <span class="chip col">${esc(base.alias)}</span>`;
+    }
     const joins = dataSourceOrder.slice(1);
     if (joins.length) {
-      desc += " then combine with " + joins.map(j => {
-        let s = `<span class="chip table">${esc(j.name)}</span>`;
-        if (j.alias && j.alias !== j.name) s += ` (alias <span class="chip table">${esc(j.alias)}</span>)`;
+      const jStrs = joins.map(j => {
+        let s = `<span class="chip kw">${esc(j.joinKind || "JOIN")}</span> <span class="chip table">${esc(j.name)}</span>`;
+        if (j.alias && j.alias.toLowerCase() !== j.name.toLowerCase()) {
+          s += ` <span class="chip kw">AS</span> <span class="chip col">${esc(j.alias)}</span>`;
+        }
+        if (j.onToks) s += ` ON <span class="chip cond">${esc(toText(j.onToks))}</span>`;
         return s;
-      }).join(", ");
-    }
-    let joinViz = "";
-    if (joins.length) {
-      joinViz = `<div class="join-viz">` +
-        `<div class="join-table">${esc(base.name)}${base.alias && base.alias !== base.name ? ` <span class="small-alias">(${esc(base.alias)})</span>` : ""}</div>`;
-      joins.forEach(j => {
-        const jk = j.joinKind.toLowerCase();
-        const help = JOIN_HELP[jk] || "";
-        joinViz += `<div class="join-op"><b>${esc(j.joinKind.toUpperCase())} JOIN</b><br>` +
-          (j.onToks ? `<span class="chip cond">${esc(toText(j.onToks))}</span>` : "no condition") +
-          (help ? `<div class="join-help">${esc(help)}</div>` : "") +
-          `</div><div class="join-table">${esc(j.name)}${j.alias && j.alias !== j.name ? ` <span class="small-alias">(${esc(j.alias)})</span>` : ""}</div>`;
       });
-      joinViz += `</div>`;
+      desc += " " + jStrs.join(" ");
     }
-    stages.push({
-      title: legPrefix + "Data Sources (FROM / JOIN)",
-      type: "from",
-      desc,
-      body: joinViz
-    });
+    stages.push({ title: legPrefix + "Data Sources (FROM / JOIN)", type: "from", desc, body: "" });
   }
 
-  // WHERE
   const whereC = get("where");
   if (whereC) {
-    stages.push({
-      title: legPrefix + "Filter Rows (WHERE)",
-      type: "where",
-      desc: "Keep only rows where the condition is true — runs <i>before</i> grouping.",
-      body: renderConditions(whereC.toks)
-    });
+    stages.push({ title: legPrefix + "Filter Rows (WHERE)", type: "where", desc: `<span class="chip cond">${esc(toText(whereC.toks))}</span>`, body: "" });
   }
 
-  // GROUP BY
   const groupC = get("group");
   if (groupC) {
     const byIdx = groupC.toks.findIndex(t => t.v.toLowerCase() === "by");
-    const rest = byIdx >= 0 ? groupC.toks.slice(byIdx+1) : groupC.toks;
-    const cols = splitTopLevelCommas(rest).map(p => toText(p)).filter(Boolean);
-    stages.push({
-      title: legPrefix + "Group Rows (GROUP BY)",
-      type: "group",
-      desc: "Collapse rows into groups sharing the same values in these columns, so aggregates compute per group.",
-      body: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ")
-    });
+    const cols = splitTopLevelCommas(byIdx >= 0 ? groupC.toks.slice(byIdx+1) : groupC.toks).map(p => toText(p)).filter(Boolean);
+    stages.push({ title: legPrefix + "Group Rows (GROUP BY)", type: "group", desc: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(", "), body: "" });
   }
 
-  // SELECT (projections)
-  const selectC = get("select");
-  if (selectC) {
-    const distinct = selectC.toks[0] && selectC.toks[0].v.toLowerCase() === "distinct";
-    const exprToks = distinct ? selectC.toks.slice(1) : selectC.toks;
-    const exprs = splitTopLevelCommas(exprToks);
-    let body = "";
-    if (distinct) body += `<span class="chip kw">DISTINCT</span> `;
-    exprs.forEach(e => {
-      const txt = toText(e);
-      const overIdx = containsWindowFunc(e);
-      if (/case/i.test(txt)) {
-        body += renderCase(e);
-      } else if (overIdx >= 0) {
-        body += renderWindowFunc(e, overIdx);
-      } else {
-        const agg = containsAgg(e);
-        body += `<span class="chip ${agg?'agg':'col'}">${esc(txt)}</span> `;
-      }
-    });
-    stages.push({
-      title: legPrefix + "Project Columns (SELECT)",
-      type: "select",
-      desc: "Choose which columns/expressions appear in the output." + (distinct ? " Remove duplicate result rows." : ""),
-      body
-    });
-  }
-
-  // HAVING
   const havingC = get("having");
   if (havingC) {
-    stages.push({
-      title: legPrefix + "Filter Groups (HAVING)",
-      type: "having",
-      desc: "Like WHERE, but applied to <i>aggregated groups</i> — runs after GROUP BY.",
-      body: renderConditions(havingC.toks)
-    });
+    stages.push({ title: legPrefix + "Filter Aggregates (HAVING)", type: "having", desc: `<span class="chip cond">${esc(toText(havingC.toks))}</span>`, body: "" });
   }
 
-  // QUALIFY
   const qualifyC = get("qualify");
   if (qualifyC) {
-    stages.push({
-      title: legPrefix + "Filter Window Results (QUALIFY)",
-      type: "qualify",
-      desc: "BigQuery: filter rows based on the result of a window function (like WHERE, but for window outputs).",
-      body: renderConditions(qualifyC.toks)
-    });
+    stages.push({ title: legPrefix + "Filter Window Results (QUALIFY)", type: "qualify", desc: `<span class="chip cond">${esc(toText(qualifyC.toks))}</span>`, body: "" });
   }
 
-  // ORDER BY
+  const selectC = get("select");
+  if (selectC) {
+    const exprs = splitTopLevelCommas(selectC.toks).map(p => toText(p)).filter(Boolean);
+    stages.push({ title: legPrefix + "Project Columns (SELECT)", type: "select", desc: exprs.map(e => `<span class="chip col">${esc(e)}</span>`).join(", "), body: "" });
+  }
+
   const orderC = get("order");
   if (orderC) {
     const byIdx = orderC.toks.findIndex(t => t.v.toLowerCase() === "by");
-    const rest = byIdx >= 0 ? orderC.toks.slice(byIdx+1) : orderC.toks;
-    const parts = splitTopLevelCommas(rest);
-    let body = "";
-    parts.forEach(p => {
-      let dir = "asc", toks = p;
-      if (toks.length >= 1) {
-        const last = toks[toks.length-1];
-        if (last.type === "word" && /^(asc|desc)$/i.test(last.v)) {
-          dir = last.v.toLowerCase(); toks = toks.slice(0, -1);
-        }
-      }
-      body += `<span class="chip col">${esc(toText(toks))}</span> <span class="order-dir ${dir}">${dir.toUpperCase()}</span> `;
-    });
-    stages.push({
-      title: legPrefix + "Sort Results (ORDER BY)",
-      type: "order",
-      desc: "Order the final result set by the columns above.",
-      body
-    });
+    const txt = toText(byIdx >= 0 ? orderC.toks.slice(byIdx + 1) : orderC.toks);
+    stages.push({ title: legPrefix + "Sort Results (ORDER BY)", type: "order", desc: `<span class="chip col">${esc(txt)}</span>`, body: "" });
   }
 
-  // LIMIT
   const limitC = get("limit");
   if (limitC) {
-    stages.push({
-      title: legPrefix + "Limit Rows (LIMIT)",
-      type: "limit",
-      desc: "Keep only the first <span class='chip kw'>" + esc(toText(limitC.toks)) + "</span> rows.",
-      body: ""
-    });
-  }
-
-  // CLUSTER BY
-  const clusterC = get("cluster");
-  if (clusterC) {
-    const byIdx = clusterC.toks.findIndex(t => t.v.toLowerCase() === "by");
-    const rest = byIdx >= 0 ? clusterC.toks.slice(byIdx+1) : clusterC.toks;
-    const cols = splitTopLevelCommas(rest).map(p => toText(p)).filter(Boolean);
-    stages.push({
-      title: legPrefix + "Cluster By (CLUSTER BY)",
-      type: "cluster",
-      desc: "BigQuery: co-locate rows sharing these column values for storage/performance (applied before LIMIT).",
-      body: cols.map(c => `<span class="chip col">${esc(c)}</span>`).join(" ")
-    });
-  }
-
-  // WINDOW
-  const windowC = get("window");
-  if (windowC) {
-    stages.push({
-      title: legPrefix + "Named Windows (WINDOW)",
-      type: "window",
-      desc: "BigQuery: define reusable window specifications referenced by OVER(...) in SELECT.",
-      body: `<span class="chip kw">${esc(toText(windowC.toks))}</span>`
-    });
+    stages.push({ title: legPrefix + "Limit Output (LIMIT)", type: "limit", desc: `<span class="chip kw">${esc(toText(limitC.toks))}</span>`, body: "" });
   }
 
   return stages;
 }
 
-function analyze(sql) {
-  const tokens = tokenize(sql).filter(t => t.v !== ";");
-  const cteNames = collectCTENames(tokens);
-  const scopes = buildScopes(tokens, cteNames);
-
-  const legs = splitUnionLegs(tokens);
-  let stages = [];
-  if (legs.length === 1) {
-    stages = analyzeLeg(legs[0].toks);
-  } else {
-    legs.forEach((leg, idx) => {
-      const legStages = analyzeLeg(leg.toks, `[Leg ${idx+1}] `);
-      stages = stages.concat(legStages);
-      if (idx < legs.length - 1) {
-        stages.push({
-          title: `Combine Results (${leg.nextOp})`,
-          type: "union",
-          desc: `Combine the rows from the query legs above and below using <span class="chip kw">${esc(leg.nextOp)}</span>.`,
-          body: ""
-        });
-      }
-    });
+function detectJoinKind(jc) {
+  const head = jc.kw.split(" ");
+  let kind = "INNER";
+  for (const w of head) {
+    if (w === "join") break;
+    if (w === "outer" && kind === "INNER") kind = "FULL";
+    else if (JOIN_MODS.includes(w)) kind = w.toUpperCase();
   }
-
-  return { stages, scopes };
+  return kind;
 }
 
-// Collect every (SELECT ...) group in the query (including CTE bodies and
-// nested subqueries) as an independent "scope" so each can be visualized on
-// its own tab. The main query is always the first scope.
-function collectQueryScopes(tokens, cteNames){
-  const scopes = [];
-  const seen = new Set();
-  const cteBodies = extractCTEBodies(tokens);
-  function addScope(label, kind, bodyToks){
-    if (!bodyToks || !bodyToks.length) return;
-    const key = kind + "|" + toText(bodyToks).toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    scopes.push({ label, kind, bodyToks });
+function isIdentToken(tk) {
+  if (!tk) return false;
+  if (tk.type === "word" && !isKeyword(tk.v)) return true;
+  if (tk.v && tk.v.startsWith("`")) return true;
+  return false;
+}
+
+function extractFirstTable(toks) {
+  let name = "table", alias = null;
+  for (let j = 0; j < toks.length; j++) {
+    const tk = toks[j];
+    if (tk.type === "word" && tk.v.toLowerCase() === "unnest") {
+      let depth = 0;
+      let exprToks = [];
+      let k = j;
+      while (k < toks.length) {
+        if (toks[k].v === "(") depth++;
+        else if (toks[k].v === ")") {
+          depth--;
+          if (depth === 0) { exprToks.push(toks[k]); k++; break; }
+        }
+        exprToks.push(toks[k]);
+        k++;
+      }
+      name = toText(exprToks);
+      if (toks[k] && toks[k].type === "word" && toks[k].v.toLowerCase() === "as") k++;
+      if (toks[k] && isIdentToken(toks[k])) alias = stripTicks(toks[k].v);
+      return { name, alias: alias || name, isUnnest: true };
+    }
+
+    if ((tk.type === "word" && !isKeyword(tk.v)) || tk.v.startsWith("`")) {
+      name = stripTicks(tk.v);
+      while (j + 2 < toks.length && toks[j+1].v === "." && ((toks[j+2].type === "word" && !isKeyword(toks[j+2].v)) || toks[j+2].v.startsWith("`"))) {
+        name += "." + stripTicks(toks[j+2].v);
+        j += 2;
+      }
+      const next1 = toks[j+1];
+      const next2 = toks[j+2];
+      if (next1 && next1.type === "word" && next1.v.toLowerCase() === "as" && isIdentToken(next2)) {
+        alias = stripTicks(next2.v);
+      } else if (next1 && isIdentToken(next1) && !["on","where","join","left","right","inner","full","cross","outer","group","order","limit","union","having","qualify"].includes(next1.v.toLowerCase())) {
+        alias = stripTicks(next1.v);
+      }
+      break;
+    }
   }
-  addScope("Main query", "main", tokens);
-  // walk the token stream looking for balanced "( SELECT ... )" groups
-  for (let i = 0; i < tokens.length; i++){
-    if (tokens[i].v === "(" && i + 1 < tokens.length && tokens[i+1].v.toLowerCase() === "select"){
-      let d = 1, j = i + 1;
-      for (; j < tokens.length; j++){
-        if (tokens[j].v === "(") d++;
-        else if (tokens[j].v === ")"){ d--; if (d === 0) break; }
-      }
-      const bodyToks = tokens.slice(i + 1, j); // excludes the outer parens
-      // alias follows the closing paren: ") [AS] alias"
-      let label = "subquery", kind = "subq";
-      const after = tokens[j + 1];
-      if (after){
-        if (after.v.toLowerCase() === "as" && tokens[j + 2]) label = stripTicks(tokens[j + 2].v);
-        else if (after.type === "word" && !isKeyword(after.v)) label = stripTicks(after.v);
-      }
-      // if this body is a named CTE, label it as such
-      if (cteNames && cteBodies){
-        for (const [cn, cb] of Object.entries(cteBodies)){
-          if (toText(cb).toLowerCase() === toText(bodyToks).toLowerCase()){
-            label = cn; kind = "cte"; break;
+  return { name, alias: alias || name };
+}
+
+function parseStatementCTEs(tokens) {
+  const ctes = [];
+  let mainToks = tokens;
+
+  if (tokens.length && tokens[0].type === "word" && tokens[0].v.toLowerCase() === "with") {
+    let idx = 1;
+    if (tokens[idx] && tokens[idx].type === "word" && tokens[idx].v.toLowerCase() === "recursive") {
+      idx++;
+    }
+
+    while (idx < tokens.length) {
+      if (tokens[idx].type === "word" && !isKeyword(tokens[idx].v)) {
+        const cteName = stripTicks(tokens[idx].v);
+        let asIdx = idx + 1;
+        if (tokens[asIdx] && tokens[asIdx].v === "(") {
+          let depth = 0;
+          while (asIdx < tokens.length) {
+            if (tokens[asIdx].v === "(") depth++;
+            else if (tokens[asIdx].v === ")") {
+              depth--;
+              if (depth === 0) { asIdx++; break; }
+            }
+            asIdx++;
           }
         }
-      }
-      addScope(label, kind, bodyToks);
-    }
-  }
-  return scopes;
-}
-
-// Build all scopes (main query + each subquery/CTE) as independent ER models.
-function buildScopes(tokens, cteNames){
-  const raw = collectQueryScopes(tokens, cteNames);
-  return raw.map((sc, idx) => ({
-    label: sc.label,
-    kind: sc.kind,
-    index: idx,
-    er: buildScopeER(sc.bodyToks, cteNames)
-  }));
-}
-
-// Build an entity-relationship model for a single scope (one query body):
-// tables + the real JOIN links within that scope. Subquery/CTE sources appear
-// as opaque derived-table nodes (their internals live on their own tab), so no
-// phantom "contains" links are drawn.
-function buildScopeER(bodyToks, cteNames){
-  const tables = [];
-  const seen = new Set();
-  const links = [];
-
-  // Helper: add a table entry if not already seen, return its key
-  function addTable(name, alias, origin, cteName) {
-    const baseKey = (alias || name).toLowerCase();
-    const key = cteName ? cteName + "." + baseKey : baseKey;
-    if (!seen.has(key)) {
-      const isUnnest = stripTicks(name).toLowerCase().startsWith("unnest(");
-      const tbl = { name, alias, key, cols: [], allCols: [],
-                    origin: origin || (isUnnest ? "std" : "std"), colMeta: {},
-                    cteName: cteName || null };
-      if (isUnnest) {
-        const inner = stripTicks(name).slice(7, -1);
-        const dot = inner.lastIndexOf(".");
-        if (dot >= 0) tbl.cols.push(stripTicks(inner.slice(dot + 1)));
-      }
-      tables.push(tbl);
-    }
-    return key;
-  }
-
-  // Helper: add a join link between two table keys
-  function addLink(fromKey, toKey, left, right, leftCol, rightCol, kind) {
-    links.push({ from: fromKey, to: toKey, left, right, leftCol, rightCol, kind });
-    addCol(tables, fromKey, leftCol, "cols");
-    addCol(tables, toKey, rightCol, "cols");
-  }
-
-  // --- Process this scope's own FROM/JOIN sources ---
-  const sources = extractSourcesFromTokens(bodyToks);
-  sources.forEach((s, idx) => {
-    const isSubq = cteNames.includes(stripTicks(s.name).toLowerCase()) || s.isSubquery;
-    const key = addTable(s.name, s.alias, isSubq ? "subq" : "std", null);
-    if (idx > 0) {
-      const pairs = s.onToks ? parseOnPairs(s.onToks) : [];
-      if (pairs.length) {
-        pairs.forEach(p => {
-          const fromKey = resolveTableKey(tables, p.left);
-          const toKey = resolveTableKey(tables, p.right);
-          addLink(fromKey, toKey, p.left, p.right, colOf(p.left), colOf(p.right), s.joinKind);
-        });
+        if (tokens[asIdx] && tokens[asIdx].v.toLowerCase() === "as" && tokens[asIdx+1] && tokens[asIdx+1].v === "(") {
+          const bodyStart = asIdx + 2;
+          let depth = 1;
+          let k = bodyStart;
+          while (k < tokens.length && depth > 0) {
+            if (tokens[k].v === "(") depth++;
+            else if (tokens[k].v === ")") depth--;
+            k++;
+          }
+          const bodyToks = tokens.slice(bodyStart, k - 1);
+          ctes.push({ name: cteName, toks: bodyToks });
+          idx = k;
+          if (tokens[idx] && tokens[idx].v === ",") {
+            idx++;
+            continue;
+          } else {
+            mainToks = tokens.slice(idx);
+            break;
+          }
+        } else {
+          break;
+        }
       } else {
-        addLink(tables[0].key, key, null, null, null, null, s.joinKind);
+        break;
       }
     }
-  });
+  }
 
-  // grab every referenced column within this scope
-  collectAllColumns(bodyToks, tables);
-  // attach per-column metadata badges (GRP / SORT / FILTER / CASE / PK)
-  annotateColumns(tables, bodyToks, cteNames);
-  return { tables, links };
+  return { ctes, mainToks };
 }
 
-// Extract CTE names from a WITH clause: `name AS ( ... )`
-function collectCTENames(tokens){
+function collectCTENames(tokens) {
   const names = [];
-  for (let i=0;i<tokens.length;i++){
-    if (tokens[i].type==="word" && tokens[i].v.toLowerCase()==="with"){
-      let j = i+1;
-      // skip RECURSIVE keyword if present
-      if (j < tokens.length && tokens[j].v.toLowerCase() === "recursive") j++;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type === "word" && tokens[i].v.toLowerCase() === "with") {
+      let j = i + 1;
       let depth = 0;
-      while (j < tokens.length){
+      while (j < tokens.length) {
         if (tokens[j].v === "(") depth++;
         else if (tokens[j].v === ")") depth--;
-        if (depth === 0 && tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="("){
-          const nm = stripTicks(tokens[j].v).toLowerCase();
-          if (tokens[j+1] && tokens[j+1].v.toLowerCase()==="as" &&
-              tokens[j+2] && tokens[j+2].v==="("){
-            if (!names.includes(nm)) names.push(nm);
+        if (depth === 0 && tokens[j].type === "word" && !isKeyword(tokens[j].v)) {
+          if (tokens[j+1] && tokens[j+1].v.toLowerCase() === "as" && tokens[j+2] && tokens[j+2].v === "(") {
+            names.push(stripTicks(tokens[j].v).toLowerCase());
           }
         }
-        // only break on top-level SELECT (the main query body)
-        if (depth === 0 && tokens[j].v.toLowerCase()==="select") break;
+        if (depth === 0 && tokens[j].v.toLowerCase() === "select") break;
         j++;
       }
     }
@@ -1043,37 +1658,28 @@ function collectCTENames(tokens){
   return names;
 }
 
-// Extract each CTE's body tokens: { cteName: token[] }
-// Handles balanced parens to capture the full CTE body.
-function extractCTEBodies(tokens){
+function extractCTEBodies(tokens) {
   const bodies = {};
-  for (let i=0;i<tokens.length;i++){
-    if (tokens[i].type==="word" && tokens[i].v.toLowerCase()==="with"){
-      let j = i+1;
-      // skip RECURSIVE keyword if present
-      if (j < tokens.length && tokens[j].v.toLowerCase() === "recursive") j++;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type === "word" && tokens[i].v.toLowerCase() === "with") {
+      let j = i + 1;
       let scanDepth = 0;
-      while (j < tokens.length){
+      while (j < tokens.length) {
         if (tokens[j].v === "(") scanDepth++;
         else if (tokens[j].v === ")") scanDepth--;
-        // look for: cte_name AS ( at top level only
-        if (scanDepth === 0 && tokens[j].type==="word" && !isKeyword(tokens[j].v) && tokens[j].v!=="(" &&
-            tokens[j+1] && tokens[j+1].v.toLowerCase()==="as" &&
-            tokens[j+2] && tokens[j+2].v==="("){
+        if (scanDepth === 0 && tokens[j].type === "word" && !isKeyword(tokens[j].v) &&
+            tokens[j+1] && tokens[j+1].v.toLowerCase() === "as" && tokens[j+2] && tokens[j+2].v === "(") {
           const nm = stripTicks(tokens[j].v).toLowerCase();
-          let depth = 0, bodyStart = j+2;
-          for (let k = bodyStart; k < tokens.length; k++){
-            if (tokens[k].v==="(") depth++;
-            else if (tokens[k].v===")"){ depth--; if(depth===0){
-              bodies[nm] = tokens.slice(bodyStart+1, k);
-              scanDepth = 0;
-              j = k;
-              break;
-            }}
+          let depth = 0, bodyStart = j + 2;
+          for (let k = bodyStart; k < tokens.length; k++) {
+            if (tokens[k].v === "(") depth++;
+            else if (tokens[k].v === ")") {
+              depth--;
+              if (depth === 0) { bodies[nm] = tokens.slice(bodyStart + 1, k); j = k; break; }
+            }
           }
         }
-        // only break on top-level SELECT (the main query body)
-        if (scanDepth === 0 && tokens[j].v.toLowerCase()==="select") break;
+        if (scanDepth === 0 && tokens[j].v.toLowerCase() === "select") break;
         j++;
       }
     }
@@ -1081,201 +1687,11 @@ function extractCTEBodies(tokens){
   return bodies;
 }
 
-// Extract FROM/JOIN data sources from a token array (reused for CTE bodies).
-function extractSourcesFromTokens(toks){
-  const clauses = splitClauses(toks);
-  const get = (k) => clauses.find(c => c.kw === k || c.kw === k + " by");
-  const fromC = get("from");
-  const joinCs = clauses.filter(c => c.kw.endsWith("join"));
-  const sources = [];
-  if (fromC) {
-    const fromParts = splitTopLevelCommas(fromC.toks);
-    fromParts.forEach((part, idx) => {
-      const tbl = extractFirstTable(part);
-      if (idx > 0) { tbl.joinKind = "CROSS"; tbl.onToks = null; }
-      sources.push(tbl);
-    });
-  }
-  joinCs.forEach(jc => {
-    const kind = detectJoinKind(jc);
-    const tgt = extractFirstTable(jc.toks);
-    const onIdx = jc.toks.findIndex(t => t.v.toLowerCase() === "on");
-    let onToks = onIdx >= 0 ? jc.toks.slice(onIdx + 1) : null;
-    if (onToks) {
-      while (onToks.length && JOIN_MODS.includes(onToks[onToks.length-1].v.toLowerCase())) onToks.pop();
-    }
-    sources.push({ ...tgt, joinKind: kind, onToks });
-  });
-  return sources;
-}
-
-// Add GRP / SORT / FILTER / CASE badges to columns of the relevant tables.
-function annotateColumns(tables, tokens, cteNames){
-  if (!tokens) return;
-  const keyFor = (ref) => {
-    const dot = ref.indexOf(".");
-    if (dot < 0) return tables.length ? tables[0].key : null;
-    const t = stripTicks(ref.slice(0, dot)).toLowerCase();
-    let hit = tables.find(tb => tb.alias.toLowerCase()===t || stripTicks(tb.name).toLowerCase()===t);
-    if (hit) return hit.key;
-    // Try CTE-prefixed keys
-    hit = tables.find(tb => tb.key.endsWith("." + t));
-    return hit ? hit.key : tables[0].key;
-  };
-  function mark(ref, badge){
-    const dot = ref.indexOf(".");
-    if (dot < 0) return;
-    const key = keyFor(ref);
-    const col = colOf(ref);
-    const tb = tables.find(t => t.key===key);
-    if (!tb) return;
-    tb.colMeta[col] = tb.colMeta[col] || new Set();
-    tb.colMeta[col].add(badge);
-  }
-  // extract clauses by simple keyword scan on token list (top-level)
-  let i=0, depth=0;
-  let cur = [];
-  const clauses = {};
-  while (i < tokens.length){
-    const tk = tokens[i];
-    if (tk.v==="(") depth++;
-    else if (tk.v===")") depth--;
-    if (depth===0 && tk.type==="word"){
-      const w = tk.v.toLowerCase();
-      if (["where","group","order","having"].includes(w)){
-        // capture until next top-level clause head
-        let j=i+1; const buf=[]; let d2=0;
-        while (j<tokens.length){
-          const t2=tokens[j];
-          if (t2.v==="(") d2++;
-          else if (t2.v===")") d2--;
-          if (d2===0 && t2.type==="word" && ["where","group","order","having","limit","union","from","select"].includes(t2.v.toLowerCase())) break;
-          buf.push(t2); j++;
-        }
-        clauses[w] = buf;
-        i=j; continue;
-      }
-    }
-    i++;
-  }
-  // GROUP BY -> GRP
-  if (clauses.group){
-    const by = clauses.group.findIndex(t=>t.v.toLowerCase()==="by");
-    splitTopLevelCommas(by>=0?clauses.group.slice(by+1):clauses.group)
-      .forEach(p=>{ const txt=toText(p); const dot=txt.indexOf("."); if(dot>=0) mark(txt,"grp"); });
-  }
-  // ORDER BY -> SORT
-  if (clauses.order){
-    const by = clauses.order.findIndex(t=>t.v.toLowerCase()==="by");
-    splitTopLevelCommas(by>=0?clauses.order.slice(by+1):clauses.order)
-      .forEach(p=>{ const txt=toText(p).replace(/\s+(asc|desc)$/i,""); const dot=txt.indexOf("."); if(dot>=0) mark(txt,"sort"); });
-  }
-  // WHERE -> FILTER
-  if (clauses.where){
-    // find qualified column refs inside condition
-    for (let k=0;k<clauses.where.length-2;k++){
-      if (clauses.where[k].type==="word" && clauses.where[k+1].v==="." && clauses.where[k+2].type==="word"){
-        const ref = clauses.where[k].v+"."+clauses.where[k+2].v;
-        // skip if it's part of a larger dotted path already handled
-        mark(ref,"filt");
-      }
-    }
-  }
-  // CASE columns: mark `a.b` references that fall inside a CASE..END block
-  if (tokens){
-    let depth = 0;
-    for (let k=0;k<tokens.length;k++){
-      const w = tokens[k].v.toLowerCase();
-      if (w === "case") depth++;
-      else if (w === "end") depth = Math.max(0, depth-1);
-      if (depth > 0 && k+2 < tokens.length &&
-          tokens[k].type==="word" && tokens[k+1].v==="." && tokens[k+2].type==="word" &&
-          !isKeyword(tokens[k].v) && !isKeyword(tokens[k+2].v)){
-        mark(tokens[k].v+"."+tokens[k+2].v, "case");
-      }
-    }
-  }
-}
-
-function colOf(ref){
-  if (!ref) return null;
-  const dot = ref.lastIndexOf(".");
-  return dot < 0 ? ref : ref.slice(dot + 1);
-}
-function tblOf(ref){
-  if (!ref) return null;
-  const dot = ref.lastIndexOf(".");
-  return dot < 0 ? null : ref.slice(0, dot);
-}
-// BigQuery uses backticks for quoted identifiers; strip them for matching.
-function stripTicks(s){
-  if (!s) return s;
-  return s.replace(/`/g, "");
-}
-function addCol(tables, key, col, bucket){
-  if (!col) return;
-  const tb = tables.find(t => t.key === key);
-  if (!tb) return;
-  const list = tb[bucket] || tb.cols;
-  if (!list.includes(col)) list.push(col);
-}
-
-// Collect every `alias.col` / `table.col` reference across the whole query and
-// assign each column to its owning table. Unqualified columns go to the first
-// (FROM) table as a best-effort guess.
-function collectAllColumns(tokens, tables){
-  // build alias/name -> key lookup
-  const keys = tables.map(t => t.key);
-  const keyFor = (ref) => {
-    const dot = ref.indexOf(".");
-    if (dot < 0) return tables.length ? tables[0].key : null;
-    const t = stripTicks(ref.slice(0, dot)).toLowerCase();
-    let hit = tables.find(tb => tb.alias.toLowerCase() === t || stripTicks(tb.name).toLowerCase() === t);
-    if (hit) return hit.key;
-    // Try CTE-prefixed keys
-    hit = tables.find(tb => tb.key.endsWith("." + t));
-    return hit ? hit.key : tables[0].key;
-  };
-  let i = 0;
-  while (i < tokens.length){
-    const tk = tokens[i];
-    // pattern: word . word  where first word is a known alias/table
-    if (tk.type === "word" && i+2 < tokens.length &&
-        tokens[i+1].v === "." && tokens[i+2].type === "word" &&
-        !isKeyword(tokens[i].v) && !isKeyword(tokens[i+2].v)){
-      const ref = tk.v + "." + tokens[i+2].v;
-      const key = keyFor(ref);
-      addCol(tables, key, colOf(ref), "allCols");
-      i += 3; continue;
-    }
-    i++;
-  }
-}
-
-function resolveTableKey(tables, ref){
-  // ref is "alias.col" or "table.col" or "col" or "ctePrefix.alias.col"
-  if (!ref) return null;
-  const dot = ref.indexOf(".");
-  if (dot < 0) return tables.length ? tables[0].key : null;
-  const firstPart = stripTicks(ref.slice(0, dot)).toLowerCase();
-  // Try exact match on alias/name
-  let hit = tables.find(tb => tb.alias.toLowerCase() === firstPart || stripTicks(tb.name).toLowerCase() === firstPart);
-  if (hit) return hit.key;
-  // Try CTE-prefixed keys (e.g. alias "o" matches key "customer_spending.o")
-  hit = tables.find(tb => tb.key.endsWith("." + firstPart));
-  if (hit) return hit.key;
-  // Try full key match (for refs like "ctePrefix.alias.col")
-  hit = tables.find(tb => tb.key === firstPart || tb.key.endsWith("." + firstPart));
-  return hit ? hit.key : firstPart;
-}
-
-function parseOnPairs(toks){
-  // expect: A.x = B.y  (optionally multiple joined by AND)
-  // Also handles >=, <=, <>, !=, >, < and keyword operators (BETWEEN, LIKE, IN)
+function parseOnPairs(toks) {
   const pairs = [];
   let depth = 0, cur = [];
   const segs = [];
-  for (const t of toks){
+  for (const t of toks) {
     if (t.v === "(") depth++; else if (t.v === ")") depth--;
     if (depth === 0 && t.type === "word" && t.v.toLowerCase() === "and") { segs.push(cur); cur = []; }
     else cur.push(t);
@@ -1285,1069 +1701,449 @@ function parseOnPairs(toks){
   segs.forEach(seg => {
     const opIdx = seg.findIndex(t => CMP_OPS.has(t.v));
     if (opIdx > 0) {
-      const left = toText(seg.slice(0, opIdx));
-      const right = toText(seg.slice(opIdx+1));
-      pairs.push({ left, right, op: seg[opIdx].v });
-    } else {
-      // Fallback: extract qualified column references for BETWEEN, LIKE, IN etc.
-      const refs = [];
-      for (let k = 0; k < seg.length - 2; k++) {
-        if (seg[k].type === "word" && seg[k+1].v === "." && seg[k+2].type === "word" &&
-            !isKeyword(seg[k].v)) {
-          refs.push(seg[k].v + "." + seg[k+2].v);
-        }
-      }
-      if (refs.length >= 2) {
-        pairs.push({ left: refs[0], right: refs[1], op: "?" });
-      }
+      pairs.push({ left: toText(seg.slice(0, opIdx)), right: toText(seg.slice(opIdx+1)), op: seg[opIdx].v });
     }
   });
   return pairs;
 }
 
-// ---------- helpers ----------
-function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-
-function extractFirstTable(toks) {
-  // find table name word, then optional alias
-  let i = 0;
-  while (i < toks.length && toks[i].v.toLowerCase() === "(" ) { i++; }
-  // skip leading subquery/opening
-
-  // --- parenthesized subquery as a data source: (SELECT ... ) [AS] alias ---
-  if (toks.length && toks[0].v === "(") {
-    // find the matching closing paren for the opening one
-    let depth = 0, closeIdx = -1;
-    for (let k = 0; k < toks.length; k++) {
-      if (toks[k].v === "(") depth++;
-      else if (toks[k].v === ")") { depth--; if (depth === 0) { closeIdx = k; break; } }
-    }
-    const innerToks = closeIdx > 0 ? toks.slice(1, closeIdx) : [];
-    // alias follows the closing paren: `) as result` or `) result`
-    let alias = null;
-    const after = toks[closeIdx + 1];
-    if (after) {
-      if (after.v.toLowerCase() === "as" && toks[closeIdx + 2]) alias = stripTicks(toks[closeIdx + 2].v);
-      else if (after.type === "word" && !isKeyword(after.v)) alias = stripTicks(after.v);
-    }
-    return {
-      name: alias || "(subquery)",
-      alias: alias || "(subquery)",
-      isSubquery: true,
-      innerToks
-    };
-  }
-
-  let name = null, alias = null;
-  for (let j=0;j<toks.length;j++){
-    const isBacktick = toks[j].v.startsWith("`") && toks[j].v.endsWith("`");
-    if ((toks[j].type==="word" && !isKeyword(toks[j].v) && toks[j].v!=="(") || isBacktick) {
-      name = toks[j].v;
-      // BigQuery: a backtick-quoted identifier may contain dots
-      // (e.g. `project.dataset.table`) — keep it intact.
-      if (name.startsWith("`") && name.endsWith("`")) {
-        // strip the backticks for a cleaner label
-        name = name.slice(1, -1);
-      }
-      // BigQuery: UNNEST(array) — mark as a table-like source
-      else if (name.toLowerCase() === "unnest") {
-        // capture the array expression up to the closing paren
-        let depth = 0, expr = [];
-        for (let k = j; k < toks.length; k++) {
-          if (toks[k].v === "(") depth++;
-          else if (toks[k].v === ")") { depth--; if (depth === 0) { expr.push(toks[k]); break; } }
-          expr.push(toks[k]);
-        }
-        name = toText(expr);
-        // look for alias after the closing paren
-        // find the position of the closing paren in the original token list
-        let closeIdx = j;
-        let d = 0;
-        for (let k = j; k < toks.length; k++) {
-          if (toks[k].v === "(") d++;
-          else if (toks[k].v === ")") { d--; if (d === 0) { closeIdx = k; break; } }
-        }
-        const afterClose = toks[closeIdx + 1];
-        if (afterClose) {
-          if (afterClose.v.toLowerCase() === "as" && toks[closeIdx + 2]) alias = toks[closeIdx + 2].v;
-          else if (afterClose.type === "word" && !isKeyword(afterClose.v)) alias = afterClose.v;
-        }
-      } else {
-        // Consume multi-part dotted names (schema.table, catalog.schema.table)
-        while (j + 2 < toks.length && toks[j+1].v === "." &&
-               (toks[j+2].type === "word" || (toks[j+2].v.startsWith("`") && toks[j+2].v.endsWith("`")))) {
-          name += "." + stripTicks(toks[j+2].v);
-          j += 2;
-        }
-      }
-      // alias: next word if not keyword, or after AS
-      // (skip for UNNEST — alias was already captured above after the closing paren)
-      if (!alias) {
-        const nx = toks[j+1];
-        if (nx) {
-          if (nx.v.toLowerCase() === "as" && toks[j+2]) alias = toks[j+2].v;
-          else if (nx.type === "word" && !isKeyword(nx.v)) alias = nx.v;
-        }
-      }
-      break;
-    }
-  }
-  return { name, alias: alias || name, isSubquery: false, innerToks: [] };
+function colOf(ref) {
+  if (!ref) return "";
+  const dot = ref.lastIndexOf(".");
+  return dot < 0 ? ref : ref.slice(dot + 1);
 }
 
-function detectJoinKind(jc) {
-  // the join modifier is part of the clause head keyword, e.g. "left join"
-  const head = jc.kw.split(" ");
-  let kind = "INNER";
-  for (const w of head) {
-    if (w === "join") break;
-    if (w === "outer") {
-      // "OUTER" only implies FULL when no real direction precedes it
-      // (e.g. "FULL OUTER JOIN" or bare "OUTER JOIN"); otherwise it is a
-      // redundant qualifier on an already-specified LEFT/RIGHT/FULL join.
-      if (kind === "INNER") kind = "FULL";
-    } else if (JOIN_MODS.includes(w)) {
-      kind = w.toUpperCase();
-    }
-  }
-  return kind;
+function renderConditions(toks) {
+  return `<span class="chip cond">${esc(toText(toks))}</span>`;
 }
 
-function containsAgg(toks){
-  return toks.some(t => t.type==="word" && isAgg(t.v));
-}
-
-function renderConditions(toks){
-  // split by top-level AND / OR
-  const parts = [];
-  let depth=0, cur=[];
-  for (const t of toks){
-    if (t.v==="(") depth++; else if (t.v===")") depth--;
-    if (depth===0 && t.type==="word" && /^(and|or)$/i.test(t.v)){
-      parts.push({ conj: t.v.toLowerCase(), toks: cur }); cur=[];
-    } else cur.push(t);
-  }
-  if (cur.length) parts.push({ conj: null, toks: cur });
-  let html = "";
-  parts.forEach((p,idx)=>{
-    if (idx>0 && p.conj) html += ` <span class="chip kw">${p.conj.toUpperCase()}</span> `;
-    html += `<span class="chip cond">${esc(toText(p.toks))}</span>`;
-  });
-  return html;
-}
-
-function renderCase(toks){
-  // find WHEN ... THEN ... ELSE ... END
-  let html = `<div class="case-box">`;
-  let i=0;
-  while (i<toks.length){
-    const t = toks[i];
-    if (t.v.toLowerCase()==="when"){
-      let cond=[]; i++;
-      while(i<toks.length && toks[i].v.toLowerCase()!=="then"){ cond.push(toks[i]); i++; }
-      html += `<div><span class="when">WHEN</span> <span class="chip cond">${esc(toText(cond))}</span> `;
-    } else if (t.v.toLowerCase()==="then"){
-      let res=[]; i++;
-      while(i<toks.length && !["when","else","end"].includes(toks[i].v.toLowerCase())){ res.push(toks[i]); i++; }
-      html += `<span class="then">THEN</span> <span class="chip col">${esc(toText(res))}</span></div>`;
-    } else if (t.v.toLowerCase()==="else"){
-      let res=[]; i++;
-      while(i<toks.length && toks[i].v.toLowerCase()!=="end"){ res.push(toks[i]); i++; }
-      html += `<div><span class="else">ELSE</span> <span class="chip col">${esc(toText(res))}</span></div>`;
-    } else if (t.v.toLowerCase()==="end"){
-      i++;
-    } else if (t.v.toLowerCase()==="case"){
-      html += `<span class="chip case">CASE</span> `; i++;
-    } else {
-      i++;
-    }
-  }
-  html += `</div>`;
-  return html;
-}
-
-// ---------- render ----------
-function render(stages){
-  const el = document.getElementById("pipeline");
-  if (!stages.length){
-    el.innerHTML = `<div class="empty-state">No recognizable clauses found. Try a SELECT statement.</div>`;
-    return;
-  }
-  let html = "";
-  stages.forEach((s,idx)=>{
-    html += `<div class="stage">
-      <div class="stage-head">
-        <div class="stage-num">${idx+1}</div>
-        <div class="stage-title">${esc(s.title)}</div>
-        <div class="stage-type">${esc(s.type)}</div>
-      </div>
-      <div class="stage-desc">${s.desc}</div>
-      <div class="stage-body">${s.body}</div>
-    </div>`;
-    if (idx < stages.length-1) html += `<div class="arrow"></div>`;
-  });
-  el.innerHTML = html;
-  el.scrollTop = 0;
-}
-
-// ---------- ER diagram rendering ----------
-// Implements the blueprint: 24px grid, layered BFS column layout with
-// barycenter sorting, straight join paths, facing side-ports, color-coded
-// join types, midpoint badges and port dots.
+// ---------- ER & Lineage Diagram Rendering ----------
 const GRID_SIZE = 24;
-const TABLE_WIDTH = 224;
-const HEADER_HEIGHT = 44;
-const ROW_HEIGHT = 32;
-const COL_SPACING = 288;   // min horizontal column spacing
-const MIN_GAP = 48;        // min vertical gap between stacked tables (2 dots)
-const SEP_GAP = 56;        // hard minimum gap enforced between any two tables
-const ROOT_LEFT = true;    // first column drawn on the left
+const TABLE_WIDTH = 250;
+const ROW_HEIGHT = 28;
+const COL_SPACING = 390;
+const SEP_GAP = 60;
 
 const JOIN_COLORS = {
-  INNER: "#4f46e5",
-  LEFT:  "#10b981",
+  INNER: "#6366f1",
+  LEFT: "#10b981",
   RIGHT: "#f59e0b",
-  FULL:  "#ec4899",
-  CROSS: "#a855f7",
-  SUBQUERY_LINK: "#8b5cf6",
-  LINK:  "#8b5cf6"
+  FULL: "#ec4899",
+  UNION: "#f59e0b",
+  UDF: "#ec4899",
+  DATA_FLOW: "#38bdf8",
+  LINK: "#8b5cf6"
 };
-const JOIN_DEFAULT_COLOR = "#94a3b8";
 
-// Orthogonal routing parameters: joins are routed around cards on the 24px
-// grid, with costs that penalize turns, hugging cards, and cells already used
-// by earlier joins (so parallel links fan out instead of overlapping).
-const ROUTE_CELL = GRID_SIZE;
-const TABLE_CLEARANCE = 16;      // path clearance around card edges
-const TURN_PENALTY = 3.5;        // extra cost per 90-degree elbow
-const EDGE_USE_PENALTY = 2.2;    // extra cost per cell used by a prior join
-const PROX_PENALTY = 0.35;       // extra cost for cells touching a card
+function wrapTableName(name, maxChars = 19) {
+  if (!name) return [""];
+  const str = String(name).trim();
+  if (str.length <= maxChars) return [str];
 
-function snap(v){ return Math.round(v / GRID_SIZE) * GRID_SIZE; }
-
-// Word-wrap a table's display name to fit inside TABLE_WIDTH. Returns an array
-// of lines. Uses an approximate per-character width for the mono header font.
-const NAME_CHAR_W = 7.4;            // approx px per char at 13px mono
-const NAME_MAX_W = TABLE_WIDTH - 34; // usable width (left dot/pad + right pad)
-const NAME_LINE_H = 16;             // line height for wrapped name
-function tableNameLines(t){
-  const disp = t.alias && t.alias !== t.name ? `${t.alias} · ${t.name}` : t.name;
-  const maxChars = Math.max(1, Math.floor(NAME_MAX_W / NAME_CHAR_W));
-  if (disp.length <= maxChars) return [disp];
-  const words = disp.split(/(\s+)/); // keep separators to rejoin
+  const tokens = str.split(/(?<=[_.\s/\\-])|(?<=[a-z])(?=[A-Z])/);
   const lines = [];
-  let cur = "";
-  for (const w of words){
-    if ((cur + w).length <= maxChars){ cur += w; continue; }
-    if (cur.trim()) lines.push(cur.trim());
-    // hard-break a single token longer than a line
-    let rem = w;
-    while (rem.length > maxChars){
-      lines.push(rem.slice(0, maxChars));
-      rem = rem.slice(maxChars);
-    }
-    cur = rem;
-  }
-  if (cur.trim()) lines.push(cur.trim());
-  return lines.length ? lines : [disp];
-}
-function headerHeight(t){
-  const lines = tableNameLines(t).length;
-  return HEADER_HEIGHT + (lines - 1) * NAME_LINE_H;
-}
-function tableHeight(t){ return headerHeight(t) + t.dispCols.length * ROW_HEIGHT; }
+  let currentLine = "";
 
-// ---------- orthogonal join routing ----------
-// Builds padded obstacle rects around every card so routes stay clear.
-function buildObstacles(tables, pos){
-  return tables.map((t, i) => ({
-    x0: pos[i].x - TABLE_CLEARANCE,
-    y0: pos[i].y - TABLE_CLEARANCE,
-    x1: pos[i].x + TABLE_WIDTH + TABLE_CLEARANCE,
-    y1: pos[i].y + tableHeight(t) + TABLE_CLEARANCE
-  }));
-}
-
-function segIntersect(ax, ay, bx, by, cx, cy, dx, dy){
-  const rx = bx - ax, ry = by - ay, sx = dx - cx, sy = dy - cy;
-  const denom = rx * sy - ry * sx;
-  if (Math.abs(denom) < 1e-9) return null;
-  const t = ((cx - ax) * sy - (cy - ay) * sx) / denom;
-  const u = ((cx - ax) * ry - (cy - ay) * rx) / denom;
-  if (t <= 0 || t >= 1 || u <= 0 || u >= 1) return null;
-  return { x: ax + t * rx, y: ay + t * ry };
-}
-
-// Routes an orthogonal elbow path from port p1 to port p2 around table cards.
-// n1 / n2 are the outward normals (+1 = facing +x, -1 = facing -x) so the
-// path leaves each port perpendicular to its card edge. `usedMap` tracks cells
-// taken by already-routed joins so later links spread apart. Falls back to a
-// straight line if no route is found.
-function routeOrthogonal(p1, n1, p2, n2, obstacles, usedMap){
-  if (!obstacles || !obstacles.length) return [p1, p2];
-  const sPt = { x: p1.x + n1 * ROUTE_CELL, y: p1.y };
-  const tPt = { x: p2.x + n2 * ROUTE_CELL, y: p2.y };
-
-  let minX = Math.min(p1.x, p2.x), minY = Math.min(p1.y, p2.y);
-  let maxX = Math.max(p1.x, p2.x), maxY = Math.max(p1.y, p2.y);
-  obstacles.forEach(o => {
-    minX = Math.min(minX, o.x0); minY = Math.min(minY, o.y0);
-    maxX = Math.max(maxX, o.x1); maxY = Math.max(maxY, o.y1);
-  });
-  const pad = ROUTE_CELL * 2;
-  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-
-  const gx0 = Math.floor(minX / ROUTE_CELL), gy0 = Math.floor(minY / ROUTE_CELL);
-  const W = Math.ceil((maxX - minX) / ROUTE_CELL) + 1;
-  const H = Math.ceil((maxY - minY) / ROUTE_CELL) + 1;
-  const N = W * H;
-  const idx = (cx, cy) => cy * W + cx;
-  const cxOf = i => i % W;
-  const cyOf = i => (i / W) | 0;
-
-  // blocked cells = any card rect (with clearance); prox counts blocked
-  // neighbours so the path floats off card edges instead of hugging them.
-  const blocked = new Uint8Array(N);
-  const prox = new Float64Array(N);
-  for (let cy = 0; cy < H; cy++){
-    const y0 = gy0 * ROUTE_CELL + cy * ROUTE_CELL;
-    const y1 = y0 + ROUTE_CELL;
-    for (let cx = 0; cx < W; cx++){
-      const x0 = gx0 * ROUTE_CELL + cx * ROUTE_CELL;
-      const x1 = x0 + ROUTE_CELL;
-      const i = idx(cx, cy);
-      for (let k = 0; k < obstacles.length; k++){
-        const o = obstacles[k];
-        if (x1 > o.x0 && x0 < o.x1 && y1 > o.y0 && y0 < o.y1){ blocked[i] = 1; break; }
+  for (const token of tokens) {
+    if ((currentLine + token).length <= maxChars) {
+      currentLine += token;
+    } else {
+      if (currentLine) {
+        lines.push(currentLine);
+        currentLine = "";
       }
-    }
-  }
-  for (let cy = 0; cy < H; cy++){
-    for (let cx = 0; cx < W; cx++){
-      const i = idx(cx, cy);
-      if (blocked[i]) continue;
-      let c = 0;
-      if (cx > 0 && blocked[i - 1]) c++;
-      if (cx < W - 1 && blocked[i + 1]) c++;
-      if (cy > 0 && blocked[i - W]) c++;
-      if (cy < H - 1 && blocked[i + W]) c++;
-      prox[i] = c;
-    }
-  }
-
-  function nearestFree(pt, maxR){
-    const cc = Math.floor(pt.x / ROUTE_CELL) - gx0;
-    const cr = Math.floor(pt.y / ROUTE_CELL) - gy0;
-    let best = -1, bestD = Infinity;
-    for (let r = 0; r <= maxR; r++){
-      for (let dy = -r; dy <= r; dy++){
-        for (let dx = -r; dx <= r; dx++){
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const cxx = cc + dx, cyy = cr + dy;
-          if (cxx < 0 || cxx >= W || cyy < 0 || cyy >= H) continue;
-          const i = idx(cxx, cyy);
-          if (blocked[i]) continue;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < bestD){ bestD = d2; best = i; }
+      if (token.length > maxChars) {
+        for (let i = 0; i < token.length; i += maxChars) {
+          const chunk = token.slice(i, i + maxChars);
+          if (i + maxChars >= token.length) currentLine = chunk;
+          else lines.push(chunk);
         }
+      } else {
+        currentLine = token;
       }
     }
-    return best;
   }
+  if (currentLine) lines.push(currentLine);
+  return lines.length ? lines : [str];
+}
 
-  const start = nearestFree(sPt, 8);
-  const goal = nearestFree(tPt, 8);
-  if (start < 0 || goal < 0) return [p1, p2];
+function tableHeaderHeight(t) {
+  const lines = wrapTableName(t.name, 19);
+  const hasAlias = Boolean(t.alias && t.alias.toLowerCase() !== t.name.toLowerCase());
+  const aliasExtra = hasAlias ? 20 : 0;
+  return Math.max(44, 24 + lines.length * 16 + aliasExtra);
+}
 
-  const INF = 1e12;
-  const g = new Float64Array(N).fill(INF);
-  const came = new Int32Array(N).fill(-1);
-  const closed = new Uint8Array(N);
-  const h = i => Math.abs(cxOf(i) - cxOf(goal)) + Math.abs(cyOf(i) - cyOf(goal));
+function tableHeight(t) {
+  const cols = t.dispCols || t.cols || [];
+  const headH = tableHeaderHeight(t);
+  return headH + Math.max(1, cols.length) * ROW_HEIGHT;
+}
 
-  const heap = [];
-  function heapPush(i, score){
-    const item = [i, score];
-    heap.push(item);
-    let k = heap.length - 1;
-    while (k > 0){
-      const p = (k - 1) >> 1;
-      if (heap[p][1] <= score) break;
-      heap[k] = heap[p];
-      k = p;
-    }
-    heap[k] = item;
-  }
-  function heapPop(){
-    const top = heap[0];
-    const last = heap.pop();
-    if (heap.length && last !== top){
-      heap[0] = last;
-      let k = 0;
-      for (;;){
-        let best = k;
-        const l = k * 2 + 1, r = k * 2 + 2;
-        if (l < heap.length && heap[l][1] < heap[best][1]) best = l;
-        if (r < heap.length && heap[r][1] < heap[best][1]) best = r;
-        if (best === k) break;
-        const tmp = heap[k]; heap[k] = heap[best]; heap[best] = tmp;
-        k = best;
+function wrapLabelText(text, maxChars = 18) {
+  if (!text) return ["LINK"];
+  const str = String(text).trim();
+  if (str.length <= maxChars) return [str];
+
+  const words = str.split(/\s+/);
+  const lines = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    if ((currentLine ? currentLine + " " + word : word).length <= maxChars) {
+      currentLine = currentLine ? currentLine + " " + word : word;
+    } else {
+      if (currentLine) {
+        lines.push(currentLine);
+        currentLine = "";
+      }
+      if (word.length > maxChars) {
+        const subTokens = word.split(/(?<=[=._()/\-])|(?<=[a-z])(?=[A-Z])/);
+        let subLine = "";
+        for (const sub of subTokens) {
+          if ((subLine + sub).length <= maxChars) {
+            subLine += sub;
+          } else {
+            if (subLine) lines.push(subLine);
+            if (sub.length > maxChars) {
+              for (let i = 0; i < sub.length; i += maxChars) {
+                const chunk = sub.slice(i, i + maxChars);
+                if (i + maxChars >= sub.length) subLine = chunk;
+                else lines.push(chunk);
+              }
+            } else {
+              subLine = sub;
+            }
+          }
+        }
+        if (subLine) currentLine = subLine;
+      } else {
+        currentLine = word;
       }
     }
-    return top;
   }
+  if (currentLine) lines.push(currentLine);
+  return lines.length ? lines : [str];
+}
 
-  g[start] = 0;
-  heapPush(start, h(start));
-  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  let found = -1;
+function computeTopologicalRanks(tables, links) {
+  const nodeMap = new Map();
+  tables.forEach(t => nodeMap.set(t.key, { table: t, rank: 0, inEdges: [], outEdges: [] }));
+
+  links.forEach(l => {
+    if (nodeMap.has(l.from) && nodeMap.has(l.to)) {
+      nodeMap.get(l.to).inEdges.push(l.from);
+      nodeMap.get(l.from).outEdges.push(l.to);
+    }
+  });
+
+  let changed = true;
   let guard = 0;
-  while (heap.length && guard < N * 6){
+  while (changed && guard < 100) {
     guard++;
-    const cur = heapPop()[0];
-    if (closed[cur]) continue;
-    closed[cur] = 1;
-    if (cur === goal){ found = cur; break; }
-    const prev = came[cur];
-    const dirX = prev >= 0 ? cxOf(cur) - cxOf(prev) : 0;
-    const dirY = prev >= 0 ? cyOf(cur) - cyOf(prev) : 0;
-    for (let d = 0; d < 4; d++){
-      const nxc = cxOf(cur) + DIRS[d][0], nyc = cyOf(cur) + DIRS[d][1];
-      if (nxc < 0 || nxc >= W || nyc < 0 || nyc >= H) continue;
-      const ni = idx(nxc, nyc);
-      if (closed[ni] || blocked[ni]) continue;
-      let stepCost = 1 + prox[ni] * PROX_PENALTY;
-      if (prev >= 0 && (DIRS[d][0] !== dirX || DIRS[d][1] !== dirY)) stepCost += TURN_PENALTY;
-      stepCost += (usedMap.get(ni) || 0) * EDGE_USE_PENALTY;
-      const ng = g[cur] + stepCost;
-      if (ng < g[ni]){
-        g[ni] = ng;
-        came[ni] = cur;
-        heapPush(ni, ng + h(ni));
-      }
-    }
-  }
-  if (found < 0) return [p1, p2];
-
-  const cells = [];
-  let c = found;
-  while (c !== -1){ cells.push(c); c = came[c]; }
-  cells.reverse();
-  cells.forEach(cc2 => usedMap.set(cc2, (usedMap.get(cc2) || 0) + 1));
-
-  // grid centers -> pixel points with horizontal port stubs; drop collinear points
-  const pts = [{ x: p1.x, y: p1.y }, { x: sPt.x, y: sPt.y }];
-  for (const cc2 of cells){
-    pts.push({ x: (cxOf(cc2) + gx0) * ROUTE_CELL + ROUTE_CELL / 2,
-               y: (cyOf(cc2) + gy0) * ROUTE_CELL + ROUTE_CELL / 2 });
-  }
-  pts.push({ x: tPt.x, y: tPt.y }, { x: p2.x, y: p2.y });
-
-  // split the tiny diagonal joins between a port stub and a cell centre into
-  // axis-aligned L corners so the whole path stays orthogonal
-  const ortho = [pts[0]];
-  for (let i = 1; i < pts.length; i++){
-    const a = ortho[ortho.length - 1], b = pts[i];
-    if (a.x !== b.x && a.y !== b.y) ortho.push({ x: a.x, y: b.y });
-    ortho.push(b);
+    changed = false;
+    nodeMap.forEach(n => {
+      n.inEdges.forEach(inKey => {
+        const inNode = nodeMap.get(inKey);
+        if (inNode && inNode.rank >= n.rank) {
+          n.rank = inNode.rank + 1;
+          changed = true;
+        }
+      });
+    });
   }
 
-  const dedup = [ortho[0]];
-  for (let i = 1; i < ortho.length; i++){
-    const a = dedup[dedup.length - 1], b = ortho[i];
-    if (Math.abs(a.x - b.x) > 0.01 || Math.abs(a.y - b.y) > 0.01) dedup.push(b);
-  }
-  const simple = [dedup[0]];
-  for (let i = 1; i < dedup.length - 1; i++){
-    const a = dedup[i - 1], b = dedup[i], c2 = dedup[i + 1];
-    const cross = (b.x - a.x) * (c2.y - b.y) - (c2.x - b.x) * (b.y - a.y);
-    if (Math.abs(cross) > 0.01) simple.push(b);
-  }
-  simple.push(dedup[dedup.length - 1]);
-  return simple;
+  // Force output node to far right
+  nodeMap.forEach(n => {
+    if (n.table.type === "output") n.rank += 1;
+  });
+
+  return nodeMap;
 }
 
-// Convert an orthogonal polyline into an SVG path with rounded elbows.
-function orthoPathD(pts, r){
-  if (!pts || pts.length < 2) return "";
-  let d = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i = 1; i < pts.length - 1; i++){
-    const a = pts[i - 1], b = pts[i], c = pts[i + 1];
-    const inX = Math.sign(b.x - a.x), inY = Math.sign(b.y - a.y);
-    const outX = Math.sign(c.x - b.x), outY = Math.sign(c.y - b.y);
-    if (inX === outX && inY === outY){
-      d += ` L ${b.x} ${b.y}`;
-      continue;
-    }
-    const segIn = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
-    const segOut = Math.abs(c.x - b.x) + Math.abs(c.y - b.y);
-    const rr = Math.max(1, Math.min(r, segIn / 2, segOut / 2));
-    const ax = b.x - inX * rr, ay = b.y - inY * rr;
-    const cx2 = b.x + outX * rr, cy2 = b.y + outY * rr;
-    d += ` L ${ax} ${ay} Q ${b.x} ${b.y} ${cx2} ${cy2}`;
-  }
-  const last = pts[pts.length - 1];
-  d += ` L ${last.x} ${last.y}`;
-  return d;
-}
-
-function renderER(scopes, targetId, activeIdx){
+function renderER(scopes, targetId, activeIdx) {
   const el = document.getElementById(targetId || "erDiagram");
-  if (!scopes || !scopes.length){
-    el.innerHTML = `<div class="er-empty">JOIN relationships will appear here.</div>`;
+  if (!scopes || !scopes.length) {
+    el.innerHTML = `<div class="er-empty">Relationships will appear here.</div>`;
     return;
   }
   if (activeIdx == null || activeIdx < 0 || activeIdx >= scopes.length) activeIdx = 0;
   const scope = scopes[activeIdx];
   const er = scope.er;
 
-  // tab bar (only when there is more than one scope)
   let tabsHtml = "";
-  if (scopes.length > 1){
+  if (scopes.length > 1) {
     tabsHtml = `<div class="er-tabs">`;
     scopes.forEach((sc, i) => {
       const cls = i === activeIdx ? "er-tab active" : "er-tab " + (sc.kind || "");
-      tabsHtml += `<button class="${cls}" data-scope="${i}">${esc(sc.label)}</button>`;
+      tabsHtml += `<button class="${cls}" data-scope="${i}">${sc.label}</button>`;
     });
     tabsHtml += `</div>`;
   }
 
-  // empty scope
-  if (!er || !er.tables.length){
-    el.innerHTML = tabsHtml + `<div class="er-empty">No tables in this query.</div>`;
+  if (!er || !er.tables.length) {
+    el.innerHTML = tabsHtml + `<div class="er-empty">No tables in this scope.</div>`;
     wireERTabs(el, targetId, scopes);
     return;
   }
 
-  // display set = all columns when the toggle is on, else just join columns
-  const showAll = document.getElementById("erAllCols") &&
-                  document.getElementById("erAllCols").checked;
   er.tables.forEach(t => {
-    const display = showAll ? t.allCols : t.cols;
-    t.dispCols = display && display.length ? display.slice() : ["*"];
+    const list = t.allCols && t.allCols.length ? t.allCols : t.cols;
+    t.dispCols = list && list.length ? list : ["(columns)"];
   });
 
-  const n = er.tables.length;
-  const idxOf = (key) => er.tables.findIndex(t => t.key === key);
-  const edges = er.links
-    .map(l => ({ a: idxOf(l.from), b: idxOf(l.to), l }))
-    .filter(e => e.a >= 0 && e.b >= 0);
+  // Calculate topological rank column layout
+  const rankMap = computeTopologicalRanks(er.tables, er.links);
+  const ranks = new Map(); // rankNum -> array of table indices
 
-  // --- adjacency list (undirected) ---
-  const adj = Array.from({ length: n }, () => []);
-  edges.forEach(e => { adj[e.a].push(e.b); adj[e.b].push(e.a); });
-  const degree = (i) => adj[i].length;
+  er.tables.forEach((t, i) => {
+    const r = rankMap.get(t.key) ? rankMap.get(t.key).rank : 0;
+    if (!ranks.has(r)) ranks.set(r, []);
+    ranks.get(r).push(i);
+  });
 
-  // --- find connected components ---
-  const compOf = new Array(n).fill(-1);
-  const comps = [];
-  for (let i=0;i<n;i++){
-    if (compOf[i] !== -1) continue;
-    const q = [i]; compOf[i] = comps.length;
-    const nodes = [];
-    while (q.length){
-      const u = q.pop(); nodes.push(u);
-      adj[u].forEach(v => { if (compOf[v] === -1){ compOf[v] = compOf[u]; q.push(v); } });
-    }
-    comps.push(nodes);
-  }
-
-  // --- force-directed layout per component ---
-  // Replaces the old strict column layout. Tables are pushed apart by
-  // repulsion, pulled together along joins, and separated so that a hub
-  // joined to many tables fans out in a square/rectangle instead of a line,
-  // keeping inter-join links visible.
   const pos = er.tables.map(() => ({ x: 0, y: 0 }));
+  const sortedRanks = Array.from(ranks.keys()).sort((a,b) => a - b);
 
-  function layoutComponent(nodes){
-    const m = nodes.length;
-    if (m === 0) return;
-    const set = new Set(nodes);
-    const compEdges = edges.filter(e => set.has(e.a) && set.has(e.b));
-    const hAvg = nodes.reduce((s,u)=> s + tableHeight(er.tables[u]), 0) / m;
-    const k = Math.max(COL_SPACING * 0.42, (hAvg + MIN_GAP) * 0.5);
-
-    const px = {}, py = {};
-    // Radial initial placement using BFS starting from highest-degree node
-    let startNode = nodes[0];
-    let maxDeg = -1;
-    nodes.forEach(u => {
-      const deg = adj[u].filter(v => set.has(v)).length;
-      if (deg > maxDeg) {
-        maxDeg = deg;
-        startNode = u;
-      }
+  sortedRanks.forEach((r, colIdx) => {
+    const nodeIndices = ranks.get(r);
+    let yAcc = 65;
+    nodeIndices.forEach(idx => {
+      pos[idx].x = 40 + colIdx * COL_SPACING;
+      pos[idx].y = yAcc;
+      yAcc += tableHeight(er.tables[idx]) + SEP_GAP;
     });
-
-    const q = [startNode];
-    const placed = new Set([startNode]);
-    px[startNode] = 0;
-    py[startNode] = 0;
-
-    while (q.length) {
-      const u = q.shift();
-      const neighbors = adj[u].filter(v => set.has(v) && !placed.has(v));
-      const count = neighbors.length;
-      neighbors.forEach((v, idx) => {
-        const angle = (idx / count) * 2 * Math.PI;
-        px[v] = px[u] + k * Math.cos(angle);
-        py[v] = py[u] + k * Math.sin(angle);
-        placed.add(v);
-        q.push(v);
-      });
-    }
-
-    let temp = k * 2.2;
-    const iters = 500;
-    for (let it = 0; it < iters; it++){
-      const dispX = {}, dispY = {};
-      nodes.forEach(u => { dispX[u] = 0; dispY[u] = 0; });
-      // repulsion between every pair
-      for (let a = 0; a < m; a++){
-        for (let b = a + 1; b < m; b++){
-          const u = nodes[a], v = nodes[b];
-          let dx = px[u] - px[v], dy = py[u] - py[v];
-          let dist = Math.hypot(dx, dy) || 0.01;
-          const minX = TABLE_WIDTH + SEP_GAP;
-          const minY = (tableHeight(er.tables[u]) + tableHeight(er.tables[v])) / 2 + SEP_GAP;
-          let f = (k * k) / dist;
-          if (Math.abs(dx) < minX && Math.abs(dy) < minY) f *= 3;
-          const fx = (dx / dist) * f, fy = (dy / dist) * f;
-          dispX[u] += fx; dispY[u] += fy;
-          dispX[v] -= fx; dispY[v] -= fy;
-        }
-      }
-      // attraction along join edges
-      compEdges.forEach(e => {
-        const u = e.a, v = e.b;
-        let dx = px[u] - px[v], dy = py[u] - py[v];
-        let dist = Math.hypot(dx, dy) || 0.01;
-        const f = (dist * dist) / (k * 0.72);
-        const fx = (dx / dist) * f, fy = (dy / dist) * f;
-        dispX[u] -= fx; dispY[u] -= fy;
-        dispX[v] += fx; dispY[v] += fy;
-      });
-      // edge-crossing penalty/repulsion: push nodes away from join lines
-      compEdges.forEach(e => {
-        const u = e.a, v = e.b;
-        nodes.forEach(w => {
-          if (w === u || w === v) return;
-          const x0 = px[w], y0 = py[w];
-          const x1 = px[u], y1 = py[u];
-          const x2 = px[v], y2 = py[v];
-          const dx = x2 - x1, dy = y2 - y1;
-          const l2 = dx*dx + dy*dy;
-          if (l2 < 10) return;
-          let t = ((x0 - x1)*dx + (y0 - y1)*dy) / l2;
-          t = Math.max(0, Math.min(1, t));
-          const pxClosest = x1 + t*dx;
-          const pyClosest = y1 + t*dy;
-          const dist = Math.hypot(x0 - pxClosest, y0 - pyClosest) || 0.01;
-          const minClearance = TABLE_WIDTH * 0.8;
-          if (dist < minClearance) {
-            const f = (minClearance - dist) * 0.12;
-            const fx = ((x0 - pxClosest) / dist) * f;
-            const fy = ((y0 - pyClosest) / dist) * f;
-            dispX[w] += fx; dispY[w] += fy;
-            dispX[u] -= fx * 0.5; dispY[u] -= fy * 0.5;
-            dispX[v] -= fx * 0.5; dispY[v] -= fy * 0.5;
-          }
-        });
-      });
-      // edge-edge crossing reduction: push the endpoints of crossing joins
-      // away from the intersection so they untangle over the annealing loop
-      for (let e1i = 0; e1i < compEdges.length; e1i++){
-        for (let e2i = e1i + 1; e2i < compEdges.length; e2i++){
-          const e1 = compEdges[e1i], e2 = compEdges[e2i];
-          if (e1.a === e2.a || e1.a === e2.b || e1.b === e2.a || e1.b === e2.b) continue;
-          const X = segIntersect(px[e1.a], py[e1.a], px[e1.b], py[e1.b],
-                                 px[e2.a], py[e2.a], px[e2.b], py[e2.b]);
-          if (!X) continue;
-          const f = Math.min(2.2, k * 0.03);
-          [[e1.a, e1.b], [e2.a, e2.b]].forEach(pair => {
-            pair.forEach(nd => {
-              const dx = px[nd] - X.x, dy = py[nd] - X.y;
-              const dist = Math.hypot(dx, dy) || 0.01;
-              dispX[nd] += (dx / dist) * f;
-              dispY[nd] += (dy / dist) * f;
-            });
-          });
-        }
-      }
-      // move
-      nodes.forEach(u => {
-        const d = Math.hypot(dispX[u], dispY[u]) || 0.01;
-        const lim = Math.min(d, temp);
-        px[u] += (dispX[u] / d) * lim;
-        py[u] += (dispY[u] / d) * lim;
-      });
-      temp *= 0.985;
-    }
-
-    // hard bounding-box separation pass
-    for (let pass = 0; pass < 600; pass++){
-      let worst = 0;
-      for (let a = 0; a < m; a++){
-        for (let b = a + 1; b < m; b++){
-          const u = nodes[a], v = nodes[b];
-          const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
-          const hu = tableHeight(er.tables[u]), hv = tableHeight(er.tables[v]);
-          const ox = (wu + wv) / 2 + SEP_GAP - Math.abs(px[u] - px[v]);
-          const oy = (hu + hv) / 2 + SEP_GAP - Math.abs((py[u] + hu/2) - (py[v] + hv/2));
-          if (ox > 0 && oy > 0){
-            worst = Math.max(worst, Math.min(ox, oy));
-            if (ox < oy){
-              const dir = px[u] <= px[v] ? -1 : 1;
-              px[u] += dir * ox / 2; px[v] -= dir * ox / 2;
-            } else {
-              const dir = py[u] <= py[v] ? -1 : 1;
-              py[u] += dir * oy / 2; py[v] -= dir * oy / 2;
-            }
-          }
-        }
-      }
-      if (worst < 0.5) break;
-    }
-
-    return { px, py, k };
-  }
-
-  // Separate components into connected (>= 2 tables) and singletons
-  const connectedComps = comps.filter(nodes => nodes.length > 1);
-  const singletonComps = comps.filter(nodes => nodes.length === 1);
-
-  let offsetX = 0;
-  let globalMaxY = 0;
-  let globalMaxX = 0;
-
-  connectedComps.forEach(nodes => {
-    const { px, py, k } = layoutComponent(nodes);
-    let maxX = -1e9;
-    nodes.forEach(u => {
-      pos[u].x = px[u] + offsetX;
-      pos[u].y = py[u];
-      maxX = Math.max(maxX, px[u] + TABLE_WIDTH);
-      globalMaxY = Math.max(globalMaxY, py[u] + tableHeight(er.tables[u]));
-    });
-    globalMaxX = Math.max(globalMaxX, offsetX + maxX);
-    offsetX += maxX + COL_SPACING * 0.8;
   });
 
-  // Tidy alignment for singleton tables below the main connected components
-  if (singletonComps.length > 0) {
-    let currentX = 0;
-    let currentY = connectedComps.length ? globalMaxY + SEP_GAP + 24 : 0;
-    let rowMaxHeight = 0;
-    const colSpacing = TABLE_WIDTH + SEP_GAP + 24;
+  // Pre-process connection port counts for smart vertical anchoring per table node
+  const outPortCounts = new Map();
+  const inPortCounts = new Map();
 
-    singletonComps.forEach(comp => {
-      const u = comp[0];
-      const tHeight = tableHeight(er.tables[u]);
-      if (connectedComps.length && currentX + TABLE_WIDTH > globalMaxX) {
-        currentX = 0;
-        currentY += rowMaxHeight + SEP_GAP + 24;
-        rowMaxHeight = 0;
+  const linkGeometries = er.links.map(l => {
+    const aIdx = er.tables.findIndex(t => t.key === l.from);
+    const bIdx = er.tables.findIndex(t => t.key === l.to);
+    if (aIdx < 0 || bIdx < 0) return null;
+
+    const tA = er.tables[aIdx];
+    const tB = er.tables[bIdx];
+
+    const headHA = tableHeaderHeight(tA);
+    const headHB = tableHeaderHeight(tB);
+
+    // Source port Y
+    let p1Y;
+    if (l.leftCol && tA.dispCols && tA.dispCols.includes(l.leftCol)) {
+      const colIdx = tA.dispCols.indexOf(l.leftCol);
+      p1Y = pos[aIdx].y + headHA + colIdx * ROW_HEIGHT + ROW_HEIGHT / 2;
+    } else {
+      const outCount = outPortCounts.get(l.from) || 0;
+      outPortCounts.set(l.from, outCount + 1);
+      const hA = tableHeight(tA);
+      p1Y = pos[aIdx].y + Math.min(headHA / 2 + outCount * 18, hA - 14);
+    }
+
+    // Target port Y
+    let p2Y;
+    if (l.rightCol && tB.dispCols && tB.dispCols.includes(l.rightCol)) {
+      const colIdx = tB.dispCols.indexOf(l.rightCol);
+      p2Y = pos[bIdx].y + headHB + colIdx * ROW_HEIGHT + ROW_HEIGHT / 2;
+    } else {
+      const inCount = inPortCounts.get(l.to) || 0;
+      inPortCounts.set(l.to, inCount + 1);
+      const hB = tableHeight(tB);
+      p2Y = pos[bIdx].y + Math.min(headHB / 2 + inCount * 18, hB - 14);
+    }
+
+    const p1 = { x: pos[aIdx].x + TABLE_WIDTH, y: p1Y };
+    const p2 = { x: pos[bIdx].x, y: p2Y };
+
+    const dx = Math.max(50, Math.abs(p2.x - p1.x) / 2);
+    const d = `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
+
+    let badgeX = (p1.x + p2.x) / 2;
+    let badgeY = (p1.y + p2.y) / 2;
+
+    const labelText = l.label || l.kind || "LINK";
+    const labelLines = wrapLabelText(labelText, 18);
+    const maxLineLen = Math.max(...labelLines.map(line => line.length));
+    const badgeW = Math.max(64, maxLineLen * 7 + 22);
+    const lineHeight = 13;
+    const badgeH = Math.max(20, labelLines.length * lineHeight + 8);
+
+    return {
+      link: l,
+      aIdx, bIdx,
+      p1, p2, dx, d,
+      badgeX, badgeY,
+      badgeW, badgeH,
+      labelLines,
+      color: JOIN_COLORS[l.kind.toUpperCase()] || JOIN_COLORS.LINK
+    };
+  }).filter(Boolean);
+
+  const MIN_BADGE_Y = 32;
+
+  // Collision Resolution Pass 1: Prevent Badges from Overlapping Table Cards
+  linkGeometries.forEach(g => {
+    er.tables.forEach((t, i) => {
+      const tx = pos[i].x;
+      const ty = pos[i].y;
+      const tw = TABLE_WIDTH;
+      const th = tableHeight(t);
+
+      const bx1 = g.badgeX - g.badgeW / 2;
+      const bx2 = g.badgeX + g.badgeW / 2;
+      const by1 = g.badgeY - g.badgeH / 2;
+      const by2 = g.badgeY + g.badgeH / 2;
+
+      // Real geometric bounding box overlap check (with 4px margin)
+      const overlapX = (bx1 < tx + tw + 4) && (bx2 > tx - 4);
+      const overlapY = (by1 < ty + th + 4) && (by2 > ty - 4);
+
+      if (overlapX && overlapY) {
+        if (g.badgeY < ty + th / 2) {
+          g.badgeY = Math.max(MIN_BADGE_Y + g.badgeH / 2, ty - g.badgeH / 2 - 8);
+        } else {
+          g.badgeY = ty + th + g.badgeH / 2 + 8;
+        }
       }
-      pos[u].x = currentX;
-      pos[u].y = currentY;
-      rowMaxHeight = Math.max(rowMaxHeight, tHeight);
-      currentX += colSpacing;
     });
-  }
-
-  // --- bounds ---
-  let minX=1e9, minY=1e9, maxX=-1e9, maxY=-1e9;
-  er.tables.forEach((t,i)=>{
-    minX=Math.min(minX,pos[i].x); minY=Math.min(minY,pos[i].y);
-    maxX=Math.max(maxX,pos[i].x+TABLE_WIDTH); maxY=Math.max(maxY,pos[i].y+tableHeight(t));
   });
-  const PAD = 24;
-  const offX = PAD - minX, offY = PAD - minY;
-  er.tables.forEach((_,i)=>{ pos[i].x+=offX; pos[i].y+=offY; });
 
-  // final separation pass on the actual (unsnapped) positions. Split each
-  // overlap between BOTH tables so a single push can't shove one table into a
-  // third; include the grid size in the required gap so the final snap() below
-  // can never round two tables back into a visual overlap.
-  const SNAP_SLACK = GRID_SIZE;
-  for (let pass = 0; pass < 1000; pass++){
-    let worst = 0;
-    for (let a = 0; a < n; a++){
-      for (let b = a + 1; b < n; b++){
-        const wu = TABLE_WIDTH, wv = TABLE_WIDTH;
-        const hu = tableHeight(er.tables[a]), hv = tableHeight(er.tables[b]);
-        const ox = (wu + wv) / 2 + SEP_GAP + SNAP_SLACK - Math.abs(pos[a].x - pos[b].x);
-        const oy = (hu + hv) / 2 + SEP_GAP + SNAP_SLACK - Math.abs((pos[a].y + hu/2) - (pos[b].y + hv/2));
-        if (ox > 0 && oy > 0){
-          worst = Math.max(worst, Math.min(ox, oy));
-          if (ox < oy){
-            const dir = pos[a].x <= pos[b].x ? -1 : 1;
-            pos[a].x += dir * ox / 2;
-            pos[b].x -= dir * ox / 2;
+  // Collision Resolution Pass 2: Prevent Badges from Overlapping Each Other
+  for (let iter = 0; iter < 12; iter++) {
+    let hadOverlap = false;
+    for (let i = 0; i < linkGeometries.length; i++) {
+      for (let j = i + 1; j < linkGeometries.length; j++) {
+        const g1 = linkGeometries[i];
+        const g2 = linkGeometries[j];
+
+        const dx = Math.abs(g1.badgeX - g2.badgeX);
+        const dy = Math.abs(g1.badgeY - g2.badgeY);
+
+        const minDistX = (g1.badgeW + g2.badgeW) / 2 + 8;
+        const minDistY = (g1.badgeH + g2.badgeH) / 2 + 6;
+
+        if (dx < minDistX && dy < minDistY) {
+          hadOverlap = true;
+          const shiftY = minDistY - dy + 2;
+          if (g1.badgeY <= g2.badgeY) {
+            g1.badgeY -= shiftY / 2;
+            g2.badgeY += shiftY / 2;
           } else {
-            const dir = pos[a].y <= pos[b].y ? -1 : 1;
-            pos[a].y += dir * oy / 2;
-            pos[b].y -= dir * oy / 2;
+            g1.badgeY += shiftY / 2;
+            g2.badgeY -= shiftY / 2;
+          }
+          if (dx < 6) {
+            g1.badgeX -= 12;
+            g2.badgeX += 12;
           }
         }
       }
     }
-    if (worst < 0.5) break;
-  }
-
-  // snap to grid last (SNAP_SLACK above guarantees post-snap gap stays
-  // positive so grid rounding can't reintroduce a visual overlap).
-  er.tables.forEach((_,i)=>{ pos[i].x = snap(pos[i].x); pos[i].y = snap(pos[i].y); });
-
-  // recompute bounds and re-apply padding so the diagram fits the viewport
-  minX=1e9; minY=1e9; maxX=-1e9; maxY=-1e9;
-  er.tables.forEach((t,i)=>{
-    minX=Math.min(minX,pos[i].x); minY=Math.min(minY,pos[i].y);
-    maxX=Math.max(maxX,pos[i].x+TABLE_WIDTH); maxY=Math.max(maxY,pos[i].y+tableHeight(t));
-  });
-  const offX2 = PAD - minX, offY2 = PAD - minY;
-  er.tables.forEach((_,i)=>{ pos[i].x+=offX2; pos[i].y+=offY2; });
-  minX+=offX2; minY+=offY2; maxX+=offX2; maxY+=offY2;
-
-  function getPortCoordinates(i, col, faceRight, yOffset = 0){
-    const t = er.tables[i];
-    const ci = t.dispCols.indexOf(col);
-    const x = faceRight ? pos[i].x + TABLE_WIDTH : pos[i].x;
-    const y = pos[i].y + headerHeight(t) + (ci < 0 ? 0 : ci*ROW_HEIGHT) + ROW_HEIGHT/2 + yOffset;
-    return { x, y };
-  }
-
-  // Pre-calculate port usage for fanning out overlapping lines
-  const portCounts = {};
-  const portIndices = {};
-  edges.forEach(ed => {
-    const l = ed.l;
-    const k1 = ed.a + "_" + (l.leftCol || "*");
-    const k2 = ed.b + "_" + (l.rightCol || "*");
-    portCounts[k1] = (portCounts[k1] || 0) + 1;
-    portCounts[k2] = (portCounts[k2] || 0) + 1;
-  });
-
-  // obstacle rects for routing (every card, padded) + per-cell usage so
-  // parallel joins fan out along their whole length, not just at the port
-  const obstacles = buildObstacles(er.tables, pos);
-  const usedMap = new Map();
-  const darkKinds = new Set(["LEFT","RIGHT","FULL","CROSS"]);
-
-  // --- route every join before the canvas bounds are finalized ---
-  const joinMarkup = [];
-  let rMinX = minX, rMinY = minY, rMaxX = maxX, rMaxY = maxY;
-  edges.forEach(ed => {
-    const l = ed.l;
-    const color = JOIN_COLORS[(l.kind||"").toUpperCase()] || JOIN_DEFAULT_COLOR;
-    const aCx = pos[ed.a].x + TABLE_WIDTH/2;
-    const bCx = pos[ed.b].x + TABLE_WIDTH/2;
-    const aRight = bCx >= aCx;
-    const bRight = aCx >= bCx;
-
-    const k1 = ed.a + "_" + (l.leftCol || "*");
-    const k2 = ed.b + "_" + (l.rightCol || "*");
-    const idx1 = portIndices[k1] || 0;
-    portIndices[k1] = idx1 + 1;
-    const idx2 = portIndices[k2] || 0;
-    portIndices[k2] = idx2 + 1;
-
-    const total1 = portCounts[k1];
-    const total2 = portCounts[k2];
-    const offset1 = total1 > 1 ? (idx1 - (total1 - 1) / 2) * 6 : 0;
-    const offset2 = total2 > 1 ? (idx2 - (total2 - 1) / 2) * 6 : 0;
-
-    const p1 = getPortCoordinates(ed.a, l.leftCol, aRight, offset1);
-    const p2 = getPortCoordinates(ed.b, l.rightCol, bRight, offset2);
-
-    // orthogonal route around the cards (straight-line fallback)
-    const pts = routeOrthogonal(p1, aRight ? 1 : -1, p2, bRight ? 1 : -1, obstacles, usedMap);
-    const d = orthoPathD(pts, 8);
-    pts.forEach(p => {
-      if (p.x < rMinX) rMinX = p.x;
-      if (p.x > rMaxX) rMaxX = p.x;
-      if (p.y < rMinY) rMinY = p.y;
-      if (p.y > rMaxY) rMaxY = p.y;
-    });
-
-    // midpoint of the routed path (for the badge)
-    let mid = p1;
-    let total = 0;
-    for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
-    let acc = 0;
-    for (let i = 1; i < pts.length; i++){
-      const seg = Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y) || 1;
-      if (acc + seg >= total / 2){
-        const t = (total / 2 - acc) / seg;
-        mid = { x: pts[i-1].x + (pts[i].x - pts[i-1].x) * t,
-                y: pts[i-1].y + (pts[i].y - pts[i-1].y) * t };
-        break;
+    // Clamp all badges so their top edge never goes above MIN_BADGE_Y
+    linkGeometries.forEach(g => {
+      if (g.badgeY - g.badgeH / 2 < MIN_BADGE_Y) {
+        g.badgeY = MIN_BADGE_Y + g.badgeH / 2;
       }
-      acc += seg;
-    }
+    });
+    if (!hadOverlap) break;
+  }
 
-    // invisible thick hit path + visible routed path + hover glow underlay
-    joinMarkup.push(`<g class="er-join" data-kind="${esc(l.kind||'')}" data-a="${esc(ed.a)}" data-b="${esc(ed.b)}" data-leftcol="${esc(l.leftCol||'')}" data-rightcol="${esc(l.rightCol||'')}">`);
-    joinMarkup.push(`<path class="er-hit" d="${d}" stroke="transparent" stroke-width="10" fill="none"/>`);
-    joinMarkup.push(`<path class="er-glow" d="${d}" stroke="${color}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none" filter="url(#erGlow)"/>`);
-    joinMarkup.push(`<path class="er-line" d="${d}" stroke="${color}" stroke-width="2" fill="none"/>`);
-    joinMarkup.push(`<circle class="er-port" cx="${p1.x}" cy="${p1.y}" r="4" fill="${color}"/>`);
-    joinMarkup.push(`<circle class="er-port" cx="${p2.x}" cy="${p2.y}" r="4" fill="${color}"/>`);
-    // midpoint badge (join kind)
-    const txtCls = darkKinds.has((l.kind||"").toUpperCase()) ? "er-badge-txt dark" : "er-badge-txt";
-    joinMarkup.push(`<g class="er-badge" transform="translate(${mid.x},${mid.y})">
-      <rect x="-26" y="-11" width="52" height="22" rx="11" fill="${color}"/>
-      <text x="0" y="4" text-anchor="middle" class="${txtCls}">${esc((l.kind||'LINK').toUpperCase())}</text>
-    </g>`);
-    joinMarkup.push(`</g>`);
+  // SVG dimensions
+  let maxX = 0, maxY = 0;
+  er.tables.forEach((t, i) => {
+    maxX = Math.max(maxX, pos[i].x + TABLE_WIDTH + 100);
+    maxY = Math.max(maxY, pos[i].y + tableHeight(t) + 70);
   });
 
-  // include route extents in the canvas so nothing gets clipped
-  minX = Math.min(minX, rMinX - 30); minY = Math.min(minY, rMinY - 30);
-  maxX = Math.max(maxX, rMaxX + 30); maxY = Math.max(maxY, rMaxY + 30);
+  linkGeometries.forEach(g => {
+    maxX = Math.max(maxX, g.badgeX + g.badgeW / 2 + 40);
+    maxY = Math.max(maxY, g.badgeY + g.badgeH / 2 + 40);
+  });
 
-  const vbX = minX - PAD, vbY = minY - PAD;
-  const svgW = maxX - minX + PAD*2;
-  const svgH = maxY - minY + PAD*2;
-
-  let svg = `<svg width="${svgW}" height="${svgH}" viewBox="${vbX} ${vbY} ${svgW} ${svgH}">`;
+  let svg = `<svg width="${maxX}" height="${maxY}" viewBox="0 0 ${maxX} ${maxY}">`;
   svg += `<defs>
     <filter id="erGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3" result="b"/><feMerge>
-      <feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <linearGradient id="erSubqGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#161224"/><stop offset="100%" stop-color="#0c0a14"/>
-    </linearGradient>
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>`;
 
-  // joins behind cards, then tables
-  svg += joinMarkup.join("");
+  // Draw Edges & Badges
+  linkGeometries.forEach(g => {
+    const l = g.link;
+    svg += `<g class="er-join" data-a="${l.from}" data-b="${l.to}">`;
+    svg += `<path class="er-hit" d="${g.d}" stroke="transparent" stroke-width="14" fill="none"/>`;
+    svg += `<path class="er-glow" d="${g.d}" stroke="${g.color}" stroke-width="8" fill="none" filter="url(#erGlow)"/>`;
+    svg += `<path class="er-line" d="${g.d}" stroke="${g.color}" stroke-width="2.2" stroke-dasharray="${l.kind==='UDF'?'4 3':''}" fill="none"/>`;
+    svg += `<circle class="er-port" cx="${g.p1.x}" cy="${g.p1.y}" r="4" fill="${g.color}"/>`;
+    svg += `<circle class="er-port" cx="${g.p2.x}" cy="${g.p2.y}" r="4" fill="${g.color}"/>`;
 
-  // --- tables ---
+    const lineHeight = 13;
+    const startY = 3.5 - (g.labelLines.length - 1) * (lineHeight / 2);
+
+    svg += `<g class="er-badge" transform="translate(${g.badgeX},${g.badgeY})">
+      <rect x="${-g.badgeW/2}" y="${-g.badgeH/2}" width="${g.badgeW}" height="${g.badgeH}" rx="${Math.min(10, g.badgeH/2)}" fill="${g.color}" stroke="#0a0a0c" stroke-width="1.5"/>
+      <text text-anchor="middle" class="er-badge-txt">`;
+    g.labelLines.forEach((line, li) => {
+      if (li === 0) {
+        svg += `<tspan x="0" y="${startY}">${esc(line)}</tspan>`;
+      } else {
+        svg += `<tspan x="0" dy="${lineHeight}">${esc(line)}</tspan>`;
+      }
+    });
+    svg += `</text></g></g>`;
+  });
+
+  // Draw Table Nodes
   er.tables.forEach((t, i) => {
     const x = pos[i].x;
     const y = pos[i].y;
+    const headH = tableHeaderHeight(t);
     const h = tableHeight(t);
-    const hh = headerHeight(t);
-    const nameLines = tableNameLines(t);
-    const originCls = t.origin === "subq" ? "subq" : (t.origin === "manual" ? "manual" : "");
-    svg += `<g class="er-table ${originCls}" data-idx="${i}" data-key="${esc(t.key)}">`;
-    svg += `<rect class="er-card ${originCls}" x="${x}" y="${y}" width="${TABLE_WIDTH}" height="${h}" rx="8" />`;
-    svg += `<path class="thead-rect" d="M ${x} ${y+8} a8,8 0 0 1 8,-8 h${TABLE_WIDTH-16} a8,8 0 0 1 8,8 v${hh-8} h-${TABLE_WIDTH} z" />`;
-    // origin indicator dot (aligned with the first name line)
-    svg += `<circle class="er-origin ${originCls||'std'}" cx="${x+13}" cy="${y+18}" r="4" />`;
-    nameLines.forEach((line, li) => {
-      svg += `<text class="tname" x="${x+24}" y="${y+22+li*NAME_LINE_H}">${esc(line)}</text>`;
-    });
-    t.dispCols.forEach((c, ci) => {
-      const rowY = y + hh + ci*ROW_HEIGHT;
-      const cy = rowY + ROW_HEIGHT/2 + 5;
-      const isJoin = er.links.some(l =>
-        (l.from === t.key && l.leftCol === c) || (l.to === t.key && l.rightCol === c));
-      if (isJoin){
-        svg += `<rect class="er-joinrow" data-col="${esc(c)}" x="${x+2}" y="${rowY+2}" width="${TABLE_WIDTH-4}" height="${ROW_HEIGHT-4}" rx="4" />`;
-      }
-      // badges: PK (join key) + GRP/SORT/FILTER/CASE from colMeta
-      const badges = [];
-      if (isJoin) badges.push(["pk","primary key"]);
-      const meta = t.colMeta[c];
-      if (meta){
-        if (meta.has("grp")) badges.push(["grp","Group By"]);
-        if (meta.has("sort")) badges.push(["sort","Order By"]);
-        if (meta.has("filt")) badges.push(["filt","WHERE"]);
-        if (meta.has("case")) badges.push(["case","CASE"]);
-      }
-      // column name
-      svg += `<text class="trow${isJoin?' join-col':''}" data-col="${esc(c)}" x="${x+14}" y="${cy}">${esc(c)}</text>`;
-      // draw badges right-aligned
-      let bx = x + TABLE_WIDTH - 10;
-      for (let b=badges.length-1; b>=0; b--){
-        const [cls,label] = badges[b];
-        const w = 6 + label.length*5.6;
-        bx -= w;
-        svg += `<text class="er-cbadge ${cls}" x="${bx}" y="${cy}">${esc(label)}</text>`;
-      }
-    });
-    svg += `</g>`;
-  });
+    const typeCls = t.type || "physical";
 
-  // --- CTE grouping background rects ---
-  const cteGroups = {};
-  er.tables.forEach((t, i) => {
-    if (t.cteName) {
-      if (!cteGroups[t.cteName]) cteGroups[t.cteName] = [];
-      cteGroups[t.cteName].push(i);
-    }
-  });
-  const CTE_PAD = 18;
-  Object.entries(cteGroups).forEach(([cteName, indices]) => {
-    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-    indices.forEach(i => {
-      const t = er.tables[i];
-      minX = Math.min(minX, pos[i].x);
-      minY = Math.min(minY, pos[i].y);
-      maxX = Math.max(maxX, pos[i].x + TABLE_WIDTH);
-      maxY = Math.max(maxY, pos[i].y + tableHeight(t));
+    const nameLines = wrapTableName(t.name, 19);
+    const hasAlias = Boolean(t.alias && t.alias.toLowerCase() !== t.name.toLowerCase());
+
+    svg += `<g class="er-table ${typeCls}" data-key="${t.key}">`;
+    svg += `<rect class="er-card ${typeCls}" x="${x}" y="${y}" width="${TABLE_WIDTH}" height="${h}" />`;
+    svg += `<path class="thead-rect" d="M ${x} ${y+8} a8,8 0 0 1 8,-8 h${TABLE_WIDTH-16} a8,8 0 0 1 8,8 v${headH-8} h-${TABLE_WIDTH} z" />`;
+    svg += `<circle class="er-origin ${typeCls}" cx="${x+14}" cy="${y+20}" r="4" />`;
+
+    nameLines.forEach((line, li) => {
+      const lineY = y + 22 + li * 16;
+      svg += `<text class="tname" x="${x+26}" y="${lineY}">${esc(line)}</text>`;
     });
-    svg += `<rect class="er-cte-group" x="${minX - CTE_PAD}" y="${minY - CTE_PAD}" width="${maxX - minX + CTE_PAD*2}" height="${maxY - minY + CTE_PAD*2}" />`;
-    svg += `<text class="er-cte-label" x="${minX - CTE_PAD + 8}" y="${minY - CTE_PAD + 14}">${esc(cteName)}</text>`;
+
+    svg += `<text class="er-type-badge ${typeCls}" x="${x+TABLE_WIDTH-12}" y="${y+16}" text-anchor="end">${typeCls.toUpperCase()}</text>`;
+
+    if (hasAlias) {
+      const aliasY = y + 22 + nameLines.length * 16 + 2;
+      const aliasTxtStr = `AS ${t.alias}`;
+      const badgeW = Math.max(42, aliasTxtStr.length * 6.5 + 10);
+      svg += `<g class="er-alias-pill" title="Table Nickname: ${esc(t.alias)}">`;
+      svg += `<rect x="${x+26}" y="${aliasY-11}" width="${badgeW}" height="15" rx="4" class="alias-bg ${typeCls}" />`;
+      svg += `<text x="${x+31}" y="${aliasY}" class="alias-txt ${typeCls}">${esc(aliasTxtStr)}</text>`;
+      svg += `</g>`;
+    }
+
+    (t.dispCols || []).forEach((c, ci) => {
+      const rowY = y + headH + ci * ROW_HEIGHT;
+      const cy = rowY + ROW_HEIGHT / 2 + 4;
+      svg += `<text class="trow" x="${x+14}" y="${cy}">${esc(c)}</text>`;
+    });
+
+    svg += `</g>`;
   });
 
   svg += `</svg>`;
   el.innerHTML = tabsHtml + svg;
   wireERTabs(el, targetId, scopes);
-
-  // --- hover dimming: emphasize hovered table/join, fade the rest ---
-  const svgEl = el.querySelector("svg");
-  if (svgEl){
-    const tables = svgEl.querySelectorAll(".er-table");
-    const joins = svgEl.querySelectorAll(".er-join");
-    function focus(target){
-      svgEl.classList.add("has-hover");
-      if (target.classList.contains("er-join")){
-        const a = target.getAttribute("data-a");
-        const b = target.getAttribute("data-b");
-        const lcol = target.getAttribute("data-leftcol");
-        const rcol = target.getAttribute("data-rightcol");
-        tables.forEach(t => {
-          const idx = t.getAttribute("data-idx");
-          const involved = (idx === a || idx === b);
-          if (!involved) t.classList.add("faded");
-          else {
-            // highlight only the column used by THIS join; dim the rest
-            const myCol = ((idx === a) ? lcol : rcol) || "";
-            t.querySelectorAll("[data-col]").forEach(r => {
-              const c = (r.getAttribute("data-col") || "").toLowerCase();
-              if (c && myCol && c === myCol.toLowerCase()) r.classList.add("active");
-            });
-          }
-        });
-        joins.forEach(j => { if (j !== target) j.classList.add("faded"); });
-      } else {
-        // hovering a table: keep it and its joins visible, fade others
-        tables.forEach(t => { if (t !== target) t.classList.add("faded"); });
-        joins.forEach(j => { if (j !== target) j.classList.add("faded"); });
-      }
-    }
-    function blur(){
-      svgEl.classList.remove("has-hover");
-      tables.forEach(t => t.classList.remove("faded"));
-      joins.forEach(j => j.classList.remove("faded"));
-      svgEl.querySelectorAll(".active").forEach(r => r.classList.remove("active"));
-    }
-    tables.forEach(t => {
-      t.addEventListener("mouseenter", () => focus(t));
-      t.addEventListener("mouseleave", blur);
-    });
-    joins.forEach(j => {
-      j.addEventListener("mouseenter", () => focus(j));
-      j.addEventListener("mouseleave", blur);
-    });
-  }
+  wireERHoverAndInspector(el, er);
 }
 
-// wire up tab clicks inside a rendered ER container
-function wireERTabs(el, targetId, scopes){
+function wireERTabs(el, targetId, scopes) {
   el.querySelectorAll(".er-tab").forEach(btn => {
     btn.addEventListener("click", () => {
       const i = parseInt(btn.getAttribute("data-scope"), 10);
@@ -2357,13 +2153,246 @@ function wireERTabs(el, targetId, scopes){
   });
 }
 
-function run(){
+function wireERHoverAndInspector(el, er) {
+  const svgEl = el.querySelector("svg");
+  if (!svgEl) return;
+
+  const tables = svgEl.querySelectorAll(".er-table");
+  const joins = svgEl.querySelectorAll(".er-join");
+
+  tables.forEach(t => {
+    const key = t.getAttribute("data-key");
+    t.addEventListener("click", (e) => {
+      if (el.__wasDragged) return;
+      showInspector(key, er);
+    });
+
+    t.addEventListener("mouseenter", () => {
+      svgEl.classList.add("has-hover");
+      // Find upstream and downstream
+      const up = new Set(), down = new Set();
+      er.links.forEach(l => {
+        if (l.to === key) up.add(l.from);
+        if (l.from === key) down.add(l.to);
+      });
+
+      tables.forEach(tb => {
+        const k = tb.getAttribute("data-key");
+        if (k === key) tb.classList.remove("faded");
+        else if (up.has(k)) { tb.classList.remove("faded"); tb.classList.add("upstream"); }
+        else if (down.has(k)) { tb.classList.remove("faded"); tb.classList.add("downstream"); }
+        else tb.classList.add("faded");
+      });
+
+      joins.forEach(j => {
+        const a = j.getAttribute("data-a");
+        const b = j.getAttribute("data-b");
+        if (a === key || b === key) j.classList.remove("faded");
+        else j.classList.add("faded");
+      });
+    });
+
+    t.addEventListener("mouseleave", () => {
+      svgEl.classList.remove("has-hover");
+      tables.forEach(tb => tb.classList.remove("faded", "upstream", "downstream"));
+      joins.forEach(j => j.classList.remove("faded"));
+    });
+  });
+}
+
+function showInspector(key, er) {
+  const node = er.tables.find(t => t.key === key);
+  if (!node) return;
+
+  const insp = document.getElementById("erInspector");
+  if (!insp) return;
+
+  const hasAlias = Boolean(node.alias && node.alias.toLowerCase() !== node.name.toLowerCase());
+  const aliasBadge = hasAlias ? ` <span class="chip col" style="font-size:11px;margin-left:4px;">AS ${esc(node.alias)}</span>` : '';
+
+  document.getElementById("inspTitle").innerHTML = `<b style="color:var(--accent)">${esc(node.name)}</b>${aliasBadge} (${node.type.toUpperCase()})`;
+  document.getElementById("inspInputs").innerHTML = Array.from(node.inputs).length ? Array.from(node.inputs).map(i => `<span class="chip table">${esc(i)}</span>`).join(" ") : "None (Base Source)";
+  document.getElementById("inspOutputs").innerHTML = Array.from(node.outputs).length ? Array.from(node.outputs).map(o => `<span class="chip table">${esc(o)}</span>`).join(" ") : "None (Final Output)";
+
+  insp.classList.add("open");
+}
+
+const inspCloseBtn = document.getElementById("inspClose");
+if (inspCloseBtn) inspCloseBtn.addEventListener("click", () => {
+  const insp = document.getElementById("erInspector");
+  if (insp) insp.classList.remove("open");
+});
+
+function syncPipelineFs() {
+  const pipelineEl = document.getElementById("pipeline");
+  const pipelineFsEl = document.getElementById("pipelineFs");
+  if (pipelineEl && pipelineFsEl) {
+    pipelineFsEl.innerHTML = pipelineEl.innerHTML;
+  }
+}
+
+function render(stages) {
+  const el = document.getElementById("pipeline");
+  if (!stages.length) {
+    el.innerHTML = `<div class="empty-state">No clauses found.</div>`;
+    syncPipelineFs();
+    return;
+  }
+  let html = "";
+  stages.forEach((s, idx) => {
+    html += `<div class="stage">
+      <div class="stage-head">
+        <div class="stage-num">${idx+1}</div>
+        <div class="stage-title">${esc(s.title)}</div>
+        <div class="stage-type">${esc(s.type)}</div>
+      </div>
+      <div class="stage-desc">${s.desc}</div>
+      <div class="stage-body">${s.body}</div>
+    </div>`;
+  });
+  el.innerHTML = html;
+  el.scrollTop = 0;
+  syncPipelineFs();
+}
+
+// ---------- Syntax Highlighting Engine ----------
+const HL_KEYWORDS = new Set([
+  "select","from","where","group","by","order","having","join","inner","left",
+  "right","full","outer","cross","natural","on","as","and","or","not","in","like",
+  "between","is","null","distinct","limit","union","all","case","when","then","else",
+  "end","asc","desc","using","with","over","partition","top","into","create","table",
+  "temp","temporary","function","returns","replace","qualify","window","tablesample",
+  "pivot","unpivot","cluster","recursive","except","intersect","offset","value",
+  "values","each","hash","sample","tumble","hop","session","unnest","interval","day",
+  "month","year","hour","minute","second"
+]);
+
+const HL_TYPES = new Set([
+  "string","numeric","int","integer","bigint","float","float64","double","boolean",
+  "bool","date","datetime","timestamp","time","bytes","json","array","struct","true","false"
+]);
+
+const HL_FUNCS = new Set([
+  "count","sum","avg","min","max","countif","group_concat","string_agg","array_agg",
+  "approx_count_distinct","approx_quantiles","approx_top_count","any_value","bit_and",
+  "bit_or","bit_xor","logical_and","logical_or","stddev","stddev_samp","stddev_pop",
+  "variance","var_samp","var_pop","corr","covar_pop","covar_samp","array_length",
+  "json_value","lag","lead","dense_rank","rank","row_number","round","cast","date_sub",
+  "date_add","current_date","current_timestamp","concat","coalesce","length","substr",
+  "substring","trim","lower","upper","ifnull","nvl"
+]);
+
+function highlightSQL(sql) {
+  if (!sql) return "";
+  const tokenRegex = /(\/\*[\s\S]*?\*\/|--[^\n]*|#[^\n]*)|(`[^`]*`|"[^"]*")|('(?:[^'\\]|\\.|'')*')|\b(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|(>=|<=|<>|!=|=|>|<|\+|-|\/|%|\|\|)|([(),.;])|\b([a-zA-Z_][a-zA-Z0-9_]*)\b|([^\s\a-zA-Z0-9_]+|\s+)/g;
+
+  let html = "";
+  let match;
+
+  while ((match = tokenRegex.exec(sql)) !== null) {
+    const [full, comment, ident, str, num, op, punc, word, misc] = match;
+
+    if (comment) {
+      html += `<span class="sql-hl-comment">${esc(comment)}</span>`;
+    } else if (ident) {
+      html += `<span class="sql-hl-ident">${esc(ident)}</span>`;
+    } else if (str) {
+      html += `<span class="sql-hl-str">${esc(str)}</span>`;
+    } else if (num) {
+      html += `<span class="sql-hl-num">${esc(num)}</span>`;
+    } else if (op) {
+      html += `<span class="sql-hl-op">${esc(op)}</span>`;
+    } else if (punc) {
+      html += `<span class="sql-hl-punc">${esc(punc)}</span>`;
+    } else if (word) {
+      const lower = word.toLowerCase();
+      const rest = sql.slice(match.index + word.length);
+      const isNextParen = /^\s*\(/.test(rest);
+
+      if (HL_KEYWORDS.has(lower)) {
+        html += `<span class="sql-hl-kw">${esc(word)}</span>`;
+      } else if (HL_TYPES.has(lower)) {
+        html += `<span class="sql-hl-type">${esc(word)}</span>`;
+      } else if (HL_FUNCS.has(lower) || isNextParen) {
+        html += `<span class="sql-hl-func">${esc(word)}</span>`;
+      } else {
+        html += `<span class="sql-hl-word">${esc(word)}</span>`;
+      }
+    } else if (misc) {
+      html += esc(misc);
+    } else {
+      html += esc(full);
+    }
+  }
+
+  if (sql.endsWith("\n")) {
+    html += "<br>";
+  }
+
+  return html;
+}
+
+function updateEditorHighlight(taId, bdId) {
+  const ta = document.getElementById(taId);
+  const bd = document.getElementById(bdId);
+  if (!ta || !bd) return;
+  const codeEl = bd.querySelector("code");
+  if (codeEl) {
+    codeEl.innerHTML = highlightSQL(ta.value);
+  }
+  bd.scrollTop = ta.scrollTop;
+  bd.scrollLeft = ta.scrollLeft;
+}
+
+function setupEditorEvents(taId, bdId, syncWithId, syncWithBdId) {
+  const ta = document.getElementById(taId);
+  const bd = document.getElementById(bdId);
+  if (!ta || !bd) return;
+
+  ta.addEventListener("input", () => {
+    updateEditorHighlight(taId, bdId);
+    if (syncWithId && syncWithBdId) {
+      const otherTa = document.getElementById(syncWithId);
+      if (otherTa) {
+        otherTa.value = ta.value;
+        updateEditorHighlight(syncWithId, syncWithBdId);
+      }
+    }
+  });
+
+  ta.addEventListener("scroll", () => {
+    bd.scrollTop = ta.scrollTop;
+    bd.scrollLeft = ta.scrollLeft;
+  });
+
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.substring(0, start) + "  " + ta.value.substring(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+      updateEditorHighlight(taId, bdId);
+      if (syncWithId && syncWithBdId) {
+        const otherTa = document.getElementById(syncWithId);
+        if (otherTa) {
+          otherTa.value = ta.value;
+          updateEditorHighlight(syncWithId, syncWithBdId);
+        }
+      }
+      ta.dispatchEvent(new Event("input"));
+    }
+  });
+}
+
+function run() {
+  updateEditorHighlight("sql", "sqlBackdrop");
+  updateEditorHighlight("sqlFs", "sqlFsBackdrop");
   const sql = document.getElementById("sql").value.trim();
-  if (!sql){
-    document.getElementById("pipeline").innerHTML =
-      `<div class="empty-state">Run <b>Visualize</b> to break this query into logical execution stages.</div>`;
-    document.getElementById("erDiagram").innerHTML =
-      `<div class="er-empty">JOIN relationships will appear here.</div>`;
+  if (!sql) {
+    document.getElementById("pipeline").innerHTML = `<div class="empty-state">Enter a SQL script and run visualize.</div>`;
+    document.getElementById("erDiagram").innerHTML = `<div class="er-empty">Relationships will appear here.</div>`;
+    syncPipelineFs();
     return;
   }
   try {
@@ -2372,44 +2401,132 @@ function run(){
     window.__erActiveScope = 0;
     render(stages);
     renderERBoth();
-  } catch (e){
-    document.getElementById("pipeline").innerHTML =
-      `<div class="error">⚠ Could not parse query:\n${esc(e.message)}\n\n(Tip: this is a lightweight visualizer, not a full SQL engine.)</div>`;
+  } catch (e) {
+    document.getElementById("pipeline").innerHTML = `<div class="error">⚠ Parsing error:\n${esc(e.message)}</div>`;
+    syncPipelineFs();
   }
 }
 
-// render the ER diagram into both the inline panel and (if open) the fullscreen overlay
-function renderERBoth(){
+function renderERBoth() {
   if (!window.__erScopes) return;
   renderER(window.__erScopes, "erDiagram", window.__erActiveScope || 0);
   if (window.__erFullscreen) renderER(window.__erScopes, "erDiagramFs", window.__erActiveScope || 0);
 }
 
-// ---------- events ----------
-const erAllColsEl = document.getElementById("erAllCols");
-if (erAllColsEl) erAllColsEl.addEventListener("change", () => {
-  const fs = document.getElementById("erAllColsFs");
-  if (fs) fs.checked = erAllColsEl.checked;
-  renderERBoth();
-});
-const erAllColsFsEl = document.getElementById("erAllColsFs");
-if (erAllColsFsEl) erAllColsFsEl.addEventListener("change", () => {
-  if (erAllColsEl) erAllColsEl.checked = erAllColsFsEl.checked;
-  renderERBoth();
+// Event Listeners
+
+// View Pane Toggles: "SQL Query", "Visual", "Breakdown"
+const leftPanel = document.getElementById("leftPanel");
+const centerPanel = document.getElementById("centerPanel");
+const rightPanel = document.getElementById("rightPanel");
+
+const toggleSqlBtn = document.getElementById("toggleSqlBtn");
+const toggleVisualBtn = document.getElementById("toggleVisualBtn");
+const toggleBreakdownBtn = document.getElementById("toggleBreakdownBtn");
+
+function updatePanelLayout() {
+  const showSql = toggleSqlBtn ? toggleSqlBtn.classList.contains("active") : true;
+  const showVisual = toggleVisualBtn ? toggleVisualBtn.classList.contains("active") : true;
+  const showBreakdown = toggleBreakdownBtn ? toggleBreakdownBtn.classList.contains("active") : true;
+
+  if (leftPanel) leftPanel.classList.toggle("hidden", !showSql);
+  if (centerPanel) centerPanel.classList.toggle("hidden", !showVisual);
+  if (rightPanel) rightPanel.classList.toggle("hidden", !showBreakdown);
+
+  // Dynamic layout adjustment if Visual canvas is hidden
+  if (!showVisual) {
+    if (leftPanel) leftPanel.style.flex = showSql ? "1 1 0%" : "";
+    if (rightPanel) rightPanel.style.flex = showBreakdown ? "1 1 0%" : "";
+  } else {
+    if (leftPanel) leftPanel.style.flex = showSql && showBreakdown ? "0 0 330px" : showSql ? "0 0 380px" : "";
+    if (rightPanel) rightPanel.style.flex = showSql && showBreakdown ? "0 0 310px" : showBreakdown ? "0 0 360px" : "";
+  }
+}
+
+[toggleSqlBtn, toggleVisualBtn, toggleBreakdownBtn].forEach(btn => {
+  if (btn) {
+    btn.addEventListener("click", () => {
+      btn.classList.toggle("active");
+      updatePanelLayout();
+    });
+  }
 });
 
-// ----- ER full screen -----
-function openERFullscreen(){
+// Zoom controls
+let currentZoom = 1.0;
+function applyZoom(zoom) {
+  currentZoom = Math.max(0.4, Math.min(2.5, zoom));
+  const el = document.getElementById("erDiagram");
+  if (el) {
+    const svg = el.querySelector("svg");
+    if (svg) {
+      svg.style.transform = `scale(${currentZoom})`;
+      svg.style.transformOrigin = "top left";
+    }
+  }
+  const txt = document.getElementById("zoomVal");
+  if (txt) txt.textContent = Math.round(currentZoom * 100) + "%";
+}
+
+const zoomInBtn = document.getElementById("zoomInBtn");
+if (zoomInBtn) zoomInBtn.addEventListener("click", () => applyZoom(currentZoom + 0.15));
+const zoomOutBtn = document.getElementById("zoomOutBtn");
+if (zoomOutBtn) zoomOutBtn.addEventListener("click", () => applyZoom(currentZoom - 0.15));
+const zoomResetBtn = document.getElementById("zoomResetBtn");
+if (zoomResetBtn) zoomResetBtn.addEventListener("click", () => applyZoom(1.0));
+
+// Fullscreen handlers
+const queryFsOverlay = document.getElementById("queryFullscreenOverlay");
+const sqlInput = document.getElementById("sql");
+const sqlFsInput = document.getElementById("sqlFs");
+
+function openQueryFullscreen() {
+  window.__queryFullscreen = true;
+  if (sqlFsInput && sqlInput) sqlFsInput.value = sqlInput.value;
+  updateEditorHighlight("sqlFs", "sqlFsBackdrop");
+  if (queryFsOverlay) queryFsOverlay.classList.add("open");
+  if (sqlFsInput) sqlFsInput.focus();
+}
+function closeQueryFullscreen() {
+  window.__queryFullscreen = false;
+  if (queryFsOverlay) queryFsOverlay.classList.remove("open");
+}
+
+const queryFsBtn = document.getElementById("queryFullscreenBtn");
+if (queryFsBtn) queryFsBtn.addEventListener("click", openQueryFullscreen);
+const queryFsExit = document.getElementById("queryFullscreenExit");
+if (queryFsExit) queryFsExit.addEventListener("click", closeQueryFullscreen);
+
+if (sqlFsInput && sqlInput) {
+  sqlFsInput.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  });
+}
+
+const breakdownFsOverlay = document.getElementById("breakdownFullscreenOverlay");
+function openBreakdownFullscreen() {
+  window.__breakdownFullscreen = true;
+  syncPipelineFs();
+  if (breakdownFsOverlay) breakdownFsOverlay.classList.add("open");
+}
+function closeBreakdownFullscreen() {
+  window.__breakdownFullscreen = false;
+  if (breakdownFsOverlay) breakdownFsOverlay.classList.remove("open");
+}
+
+const breakdownFsBtn = document.getElementById("breakdownFullscreenBtn");
+if (breakdownFsBtn) breakdownFsBtn.addEventListener("click", openBreakdownFullscreen);
+const breakdownFsExit = document.getElementById("breakdownFullscreenExit");
+if (breakdownFsExit) breakdownFsExit.addEventListener("click", closeBreakdownFullscreen);
+
+function openERFullscreen() {
   if (!window.__erScopes) return;
   window.__erFullscreen = true;
-  const erAllColsFsEl = document.getElementById("erAllColsFs");
-  const erAllColsEl = document.getElementById("erAllCols");
-  if (erAllColsFsEl && erAllColsEl) erAllColsFsEl.checked = erAllColsEl.checked;
   renderERBoth();
   const ov = document.getElementById("erFullscreenOverlay");
   if (ov) ov.classList.add("open");
 }
-function closeERFullscreen(){
+function closeERFullscreen() {
   window.__erFullscreen = false;
   const ov = document.getElementById("erFullscreenOverlay");
   if (ov) ov.classList.remove("open");
@@ -2418,30 +2535,88 @@ const erFsBtn = document.getElementById("erFullscreen");
 if (erFsBtn) erFsBtn.addEventListener("click", openERFullscreen);
 const erFsExit = document.getElementById("erFullscreenExit");
 if (erFsExit) erFsExit.addEventListener("click", closeERFullscreen);
+
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && window.__erFullscreen) closeERFullscreen();
+  if (e.key === "Escape") {
+    if (window.__erFullscreen) closeERFullscreen();
+    if (window.__queryFullscreen) closeQueryFullscreen();
+    if (window.__breakdownFullscreen) closeBreakdownFullscreen();
+  }
 });
 
 document.getElementById("clearBtn").onclick = () => {
   document.getElementById("sql").value = "";
-  document.getElementById("pipeline").innerHTML =
-    `<div class="empty-state">Run <b>Visualize</b> to break this query into logical execution stages.</div>`;
-  document.getElementById("erDiagram").innerHTML =
-    `<div class="er-empty">JOIN relationships will appear here.</div>`;
+  if (sqlFsInput) sqlFsInput.value = "";
+  updateEditorHighlight("sql", "sqlBackdrop");
+  updateEditorHighlight("sqlFs", "sqlFsBackdrop");
+  document.getElementById("pipeline").innerHTML = `<div class="empty-state">Enter a query to visualize execution stages.</div>`;
+  syncPipelineFs();
+  document.getElementById("erDiagram").innerHTML = `<div class="er-empty">Relationships will appear here.</div>`;
 };
-// Ctrl/Cmd+Enter to run
+
 document.getElementById("sql").addEventListener("keydown", e => {
-  if ((e.ctrlKey||e.metaKey) && e.key==="Enter"){ e.preventDefault(); run(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
 });
 
-// live update as the user types (debounced)
 let __sqlTimer = null;
+setupEditorEvents("sql", "sqlBackdrop", "sqlFs", "sqlFsBackdrop");
+setupEditorEvents("sqlFs", "sqlFsBackdrop", "sql", "sqlBackdrop");
+
 document.getElementById("sql").addEventListener("input", () => {
   clearTimeout(__sqlTimer);
-  __sqlTimer = setTimeout(run, 300);
+  __sqlTimer = setTimeout(run, 350);
 });
 
-// initial
+// Canvas Click & Drag Panning Logic
+function setupCanvasPan(target) {
+  const el = typeof target === "string" ? document.getElementById(target) : target;
+  if (!el) return;
+
+  let isPanning = false;
+  let startX = 0, startY = 0;
+  let startScrollLeft = 0, startScrollTop = 0;
+  let hasMoved = false;
+
+  el.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest(".er-tab") || e.target.closest("button") || e.target.closest(".er-inspector")) return;
+
+    isPanning = true;
+    hasMoved = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    startScrollLeft = el.scrollLeft;
+    startScrollTop = el.scrollTop;
+    el.classList.add("is-panning");
+  });
+
+  window.addEventListener("mousemove", (e) => {
+    if (!isPanning) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.hypot(dx, dy) > 4) {
+      hasMoved = true;
+    }
+    el.scrollLeft = startScrollLeft - dx;
+    el.scrollTop = startScrollTop - dy;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (isPanning) {
+      isPanning = false;
+      el.classList.remove("is-panning");
+      if (hasMoved) {
+        el.__wasDragged = true;
+        setTimeout(() => { el.__wasDragged = false; }, 60);
+      }
+    }
+  });
+}
+
+setupCanvasPan("erDiagram");
+setupCanvasPan("erDiagramFs");
+
+// Run initial analysis
 run();
 </script>
 </body>
